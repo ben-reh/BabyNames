@@ -36,12 +36,19 @@ export class BabyNamesStack extends cdk.Stack {
 
     // --- VPC for RDS ---
     const vpc = new ec2.Vpc(this, 'BabyNamesVpc', {
+      ipAddresses: ec2.IpAddresses.cidr('10.0.0.0/16'),
       maxAzs: 2,
       natGateways: 0,
       subnetConfiguration: [
         {
+          name: 'public',
+          subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24,
+        },
+        {
           name: 'isolated',
           subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+          cidrMask: 24,
         },
       ],
     });
@@ -56,6 +63,17 @@ export class BabyNamesStack extends cdk.Stack {
       },
     });
 
+    // --- RDS security group: allow inbound 5432 from dev machine only ---
+    const dbSg = new ec2.SecurityGroup(this, 'DbSg', {
+      vpc,
+      description: 'RDS PostgreSQL access',
+    });
+    dbSg.addIngressRule(
+      ec2.Peer.ipv4('173.197.90.226/32'),
+      ec2.Port.tcp(5432),
+      'dev machine',
+    );
+
     // --- RDS PostgreSQL db.t3.micro: popularity time-series ---
     const db = new rds.DatabaseInstance(this, 'PopularityDb', {
       engine: rds.DatabaseInstanceEngine.postgres({
@@ -67,9 +85,11 @@ export class BabyNamesStack extends cdk.Stack {
       allocatedStorage: 20,
       storageType: rds.StorageType.GP2,
       multiAz: false,
+      publiclyAccessible: true,
+      securityGroups: [dbSg],
       vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      removalPolicy: cdk.RemovalPolicy.SNAPSHOT,
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
       deletionProtection: false,
     });
 
