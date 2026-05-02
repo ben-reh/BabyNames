@@ -34,7 +34,7 @@ export class BabyNamesStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    // --- VPC for Aurora ---
+    // --- VPC for RDS ---
     const vpc = new ec2.Vpc(this, 'BabyNamesVpc', {
       maxAzs: 2,
       natGateways: 0,
@@ -56,25 +56,27 @@ export class BabyNamesStack extends cdk.Stack {
       },
     });
 
-    // --- Aurora Serverless v2: popularity time-series ---
-    const dbCluster = new rds.DatabaseCluster(this, 'PopularityDb', {
-      engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_16_6,
+    // --- RDS PostgreSQL db.t3.micro: popularity time-series ---
+    const db = new rds.DatabaseInstance(this, 'PopularityDb', {
+      engine: rds.DatabaseInstanceEngine.postgres({
+        version: rds.PostgresEngineVersion.VER_16,
       }),
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
       credentials: rds.Credentials.fromSecret(dbSecret),
-      defaultDatabaseName: 'babynames',
-      serverlessV2MinCapacity: 0.5,
-      serverlessV2MaxCapacity: 4,
-      writer: rds.ClusterInstance.serverlessV2('writer'),
+      databaseName: 'babynames',
+      allocatedStorage: 20,
+      storageType: rds.StorageType.GP2,
+      multiAz: false,
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       removalPolicy: cdk.RemovalPolicy.SNAPSHOT,
+      deletionProtection: false,
     });
 
     // --- Outputs ---
     new cdk.CfnOutput(this, 'NamesTableName', { value: namesTable.tableName });
     new cdk.CfnOutput(this, 'DataBucketName', { value: dataBucket.bucketName });
-    new cdk.CfnOutput(this, 'DbClusterEndpoint', { value: dbCluster.clusterEndpoint.hostname });
+    new cdk.CfnOutput(this, 'DbEndpoint', { value: db.instanceEndpoint.hostname });
     new cdk.CfnOutput(this, 'DbSecretArn', { value: dbSecret.secretArn });
   }
 }
