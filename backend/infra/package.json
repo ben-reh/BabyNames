@@ -10,10 +10,14 @@
   "devDependencies": {
     "@types/node": "22.x",
     "aws-cdk": "2.x",
+    "esbuild": "^0.28.0",
     "typescript": "~5.7.0"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3",
+    "@aws-sdk/lib-dynamodb": "^3",
     "aws-cdk-lib": "2.x",
-    "constructs": "^10.0.0"
+    "constructs": "^10.0.0",
+    "pg": "^8"
   }
 }

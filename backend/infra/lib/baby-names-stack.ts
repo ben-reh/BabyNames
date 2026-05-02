@@ -1,6 +1,11 @@
+import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
+import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -18,7 +23,6 @@ export class BabyNamesStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    // GSI for querying by origin
     namesTable.addGlobalSecondaryIndex({
       indexName: 'origin-index',
       partitionKey: { name: 'origin', type: dynamodb.AttributeType.STRING },
@@ -34,23 +38,20 @@ export class BabyNamesStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    // --- VPC for RDS ---
+    // --- VPC ---
     const vpc = new ec2.Vpc(this, 'BabyNamesVpc', {
       ipAddresses: ec2.IpAddresses.cidr('10.0.0.0/16'),
       maxAzs: 2,
       natGateways: 0,
       subnetConfiguration: [
-        {
-          name: 'public',
-          subnetType: ec2.SubnetType.PUBLIC,
-          cidrMask: 24,
-        },
-        {
-          name: 'isolated',
-          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-          cidrMask: 24,
-        },
+        { name: 'public',   subnetType: ec2.SubnetType.PUBLIC,           cidrMask: 24 },
+        { name: 'isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 24 },
       ],
+    });
+
+    // Free DynamoDB gateway endpoint — lets Lambda in isolated subnet reach DynamoDB
+    vpc.addGatewayEndpoint('DynamoEndpoint', {
+      service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
     });
 
     // --- Secrets Manager: DB credentials ---
@@ -63,18 +64,20 @@ export class BabyNamesStack extends cdk.Stack {
       },
     });
 
-    // --- RDS security group: allow inbound 5432 from dev machine only ---
-    const dbSg = new ec2.SecurityGroup(this, 'DbSg', {
+    // --- Security groups ---
+    const lambdaSg = new ec2.SecurityGroup(this, 'LambdaSg', {
       vpc,
-      description: 'RDS PostgreSQL access',
+      description: 'API Lambda',
+      allowAllOutbound: true,
     });
-    dbSg.addIngressRule(
-      ec2.Peer.ipv4('173.197.90.226/32'),
-      ec2.Port.tcp(5432),
-      'dev machine',
-    );
 
-    // --- RDS PostgreSQL db.t3.micro: popularity time-series ---
+    const rdsSg = new ec2.SecurityGroup(this, 'RdsSg', {
+      vpc,
+      description: 'RDS PostgreSQL - Lambda only',
+    });
+    rdsSg.addIngressRule(lambdaSg, ec2.Port.tcp(5432), 'Lambda access');
+
+    // --- RDS PostgreSQL: popularity time-series (private) ---
     const db = new rds.DatabaseInstance(this, 'PopularityDb', {
       engine: rds.DatabaseInstanceEngine.postgres({
         version: rds.PostgresEngineVersion.VER_16,
@@ -85,18 +88,65 @@ export class BabyNamesStack extends cdk.Stack {
       allocatedStorage: 20,
       storageType: rds.StorageType.GP2,
       multiAz: false,
-      publiclyAccessible: true,
-      securityGroups: [dbSg],
+      publiclyAccessible: false,
+      securityGroups: [rdsSg],
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      removalPolicy: cdk.RemovalPolicy.SNAPSHOT,
       deletionProtection: false,
     });
 
+    // --- Lambda: API handler ---
+    const apiFunction = new NodejsFunction(this, 'ApiFunction', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, '../functions/api/src/handler.ts'),
+      handler: 'handler',
+      projectRoot: path.join(__dirname, '..'),
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [lambdaSg],
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        DB_HOST: db.instanceEndpoint.hostname,
+        DB_NAME: 'babynames',
+        DB_USER: 'babynames',
+        DB_PASSWORD: dbSecret.secretValueFromJson('password').unsafeUnwrap(),
+      },
+      bundling: {
+        externalModules: [],
+      },
+    });
+
+    namesTable.grantReadData(apiFunction);
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:Query', 'dynamodb:Scan', 'dynamodb:GetItem'],
+      resources: [namesTable.tableArn, `${namesTable.tableArn}/index/*`],
+    }));
+
+    // --- API Gateway ---
+    const api = new apigateway.RestApi(this, 'BabyNamesApi', {
+      restApiName: 'BabyNamesApi',
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowMethods: ['GET'],
+      },
+    });
+
+    const integration = new apigateway.LambdaIntegration(apiFunction);
+    const names = api.root.addResource('names');
+    names.addMethod('GET', integration);
+    names.addResource('search').addMethod('GET', integration);
+
+    const nameParam = names.addResource('{name}');
+    nameParam.addMethod('GET', integration);
+    nameParam.addResource('popularity').addMethod('GET', integration);
+
     // --- Outputs ---
-    new cdk.CfnOutput(this, 'NamesTableName', { value: namesTable.tableName });
-    new cdk.CfnOutput(this, 'DataBucketName', { value: dataBucket.bucketName });
-    new cdk.CfnOutput(this, 'DbEndpoint', { value: db.instanceEndpoint.hostname });
-    new cdk.CfnOutput(this, 'DbSecretArn', { value: dbSecret.secretArn });
+    new cdk.CfnOutput(this, 'ApiUrl',          { value: api.url });
+    new cdk.CfnOutput(this, 'NamesTableName',  { value: namesTable.tableName });
+    new cdk.CfnOutput(this, 'DataBucketName',  { value: dataBucket.bucketName });
+    new cdk.CfnOutput(this, 'DbEndpoint',      { value: db.instanceEndpoint.hostname });
+    new cdk.CfnOutput(this, 'DbSecretArn',     { value: dbSecret.secretArn });
   }
 }
