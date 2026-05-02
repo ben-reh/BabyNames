@@ -15,7 +15,7 @@ RAW_DIR = os.path.join(SCRIPTS_DIR, '..', 'raw')
 CACHE_DIR = os.path.join(RAW_DIR, 'wiktionary')
 WIKTIONARY_API = "https://en.wiktionary.org/w/api.php"
 BATCH_SIZE = 50
-RATE_LIMIT_SECONDS = 1.0
+RATE_LIMIT_SECONDS = 4.0
 HEADERS = {'User-Agent': 'BabyNamesApp/1.0 (data pipeline; contact via GitHub)'}
 
 

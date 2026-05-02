@@ -37,7 +37,7 @@ def load_names():
             names[row['name']] = {
                 'name': row['name'],
                 'phonemes': tuple(pron.split()) if pron else (),
-                'gender': row.get('unisex_dominant', ''),
+                'gender': row.get('sex', ''),
                 'year_peak': year_peak,
                 'syllables': syllables,
                 'stresses': row.get('stresses', ''),

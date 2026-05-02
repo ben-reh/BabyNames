@@ -64,18 +64,22 @@ LANG_CODES = {
 
 
 def extract_wikitext(data):
-    pages = data.get('query', {}).get('pages', {})
-    for page in pages.values():
-        if page.get('ns') == -1:  # missing page
-            return None
-        revisions = page.get('revisions', [])
-        if not revisions:
-            return None
-        slots = revisions[0].get('slots', {})
-        if 'main' in slots:
-            return slots['main'].get('*', '')
-        return revisions[0].get('*', '')
-    return None
+    # Batch fetch saves the page object directly; single fetch wraps in query.pages
+    if 'revisions' in data or 'pageid' in data:
+        page = data
+    else:
+        pages = data.get('query', {}).get('pages', {})
+        page = next(iter(pages.values()), {}) if pages else {}
+
+    if not page or page.get('ns') == -1:
+        return None
+    revisions = page.get('revisions', [])
+    if not revisions:
+        return None
+    slots = revisions[0].get('slots', {})
+    if 'main' in slots:
+        return slots['main'].get('*', '')
+    return revisions[0].get('*', '')
 
 
 def extract_english_etymology(wikitext):

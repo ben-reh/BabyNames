@@ -4,9 +4,9 @@ Source: https://www.ssa.gov/oact/babynames/names.zip
 Each file format: name,gender,count  (no header, gender is M or F)
 """
 import os
-import urllib.request
 import zipfile
 import io
+import requests
 
 SCRIPTS_DIR = os.path.dirname(__file__)
 SSA_DIR = os.path.join(SCRIPTS_DIR, '..', 'raw', 'ssa')
@@ -16,9 +16,14 @@ SSA_URL = 'https://www.ssa.gov/oact/babynames/names.zip'
 def download():
     os.makedirs(SSA_DIR, exist_ok=True)
 
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.ssa.gov/oact/babynames/limits.html',
+    }
     print(f"Downloading {SSA_URL} ...")
-    with urllib.request.urlopen(SSA_URL) as response:
-        data = response.read()
+    response = requests.get(SSA_URL, headers=headers, timeout=120)
+    response.raise_for_status()
+    data = response.content
     print(f"Downloaded {len(data) / 1_000_000:.1f} MB")
 
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
