@@ -118,10 +118,29 @@ export class BabyNamesStack extends cdk.Stack {
       },
     });
 
+    // --- DynamoDB: list sessions ---
+    const listsTable = new dynamodb.Table(this, 'ListsTable', {
+      tableName: 'Lists',
+      partitionKey: { name: 'listId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'ttl',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    listsTable.addGlobalSecondaryIndex({
+      indexName: 'code-index',
+      partitionKey: { name: 'code', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     namesTable.grantReadData(apiFunction);
     apiFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ['dynamodb:Query', 'dynamodb:Scan', 'dynamodb:GetItem'],
       resources: [namesTable.tableArn, `${namesTable.tableArn}/index/*`],
+    }));
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:PutItem', 'dynamodb:GetItem', 'dynamodb:UpdateItem', 'dynamodb:Query'],
+      resources: [listsTable.tableArn, `${listsTable.tableArn}/index/*`],
     }));
 
     // --- API Gateway ---
@@ -129,22 +148,34 @@ export class BabyNamesStack extends cdk.Stack {
       restApiName: 'BabyNamesApi',
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
-        allowMethods: ['GET'],
+        allowMethods: ['GET', 'POST', 'DELETE'],
       },
     });
 
     const integration = new apigateway.LambdaIntegration(apiFunction);
+
+    // /names routes
     const names = api.root.addResource('names');
     names.addMethod('GET', integration);
     names.addResource('search').addMethod('GET', integration);
-
     const nameParam = names.addResource('{name}');
     nameParam.addMethod('GET', integration);
     nameParam.addResource('popularity').addMethod('GET', integration);
 
+    // /lists routes
+    const lists = api.root.addResource('lists');
+    lists.addMethod('POST', integration);
+    lists.addResource('join').addMethod('POST', integration);
+    const listParam = lists.addResource('{listId}');
+    listParam.addMethod('GET', integration);
+    const listNames = listParam.addResource('names');
+    listNames.addMethod('POST', integration);
+    listNames.addResource('{name}').addMethod('DELETE', integration);
+
     // --- Outputs ---
     new cdk.CfnOutput(this, 'ApiUrl',          { value: api.url });
     new cdk.CfnOutput(this, 'NamesTableName',  { value: namesTable.tableName });
+    new cdk.CfnOutput(this, 'ListsTableName',  { value: listsTable.tableName });
     new cdk.CfnOutput(this, 'DataBucketName',  { value: dataBucket.bucketName });
     new cdk.CfnOutput(this, 'DbEndpoint',      { value: db.instanceEndpoint.hostname });
     new cdk.CfnOutput(this, 'DbSecretArn',     { value: dbSecret.secretArn });
