@@ -88,8 +88,9 @@ export default function SwipeScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Discover</Text>
-        <TouchableOpacity onPress={() => router.push('/filter-sheet')}>
-          <Ionicons name="options" size={24} color={colors.text} />
+        <TouchableOpacity onPress={() => router.push('/filter-sheet')} style={styles.filterBtn}>
+          <Ionicons name="options" size={24} color={filters.sex || filters.origin ? colors.primary : colors.text} />
+          {(filters.sex || filters.origin) && <View style={styles.filterDot} />}
         </TouchableOpacity>
       </View>
 
@@ -138,6 +139,8 @@ const styles = StyleSheet.create({
   originText: { fontSize: fontSize.sm, color: colors.primary, fontWeight: '600' },
   cardMeta: { flexDirection: 'row', gap: spacing.md },
   metaText: { fontSize: fontSize.md, color: colors.textMuted },
+  filterBtn: { position: 'relative' },
+  filterDot: { position: 'absolute', top: -2, right: -2, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
   actions: { flexDirection: 'row', justifyContent: 'center', gap: spacing.xl, paddingBottom: spacing.xl + spacing.lg, paddingTop: spacing.lg },
   actionBtn: { width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 6, elevation: 3 },
   passBtn: { backgroundColor: colors.card, borderWidth: 1.5, borderColor: colors.error + '40' },

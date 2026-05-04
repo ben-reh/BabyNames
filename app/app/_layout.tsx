@@ -13,6 +13,7 @@ export default function RootLayout() {
           <Stack.Screen name="(onboarding)" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="name/[name]" options={{ presentation: 'modal', headerShown: false }} />
+          <Stack.Screen name="filter-sheet" options={{ presentation: 'modal', headerShown: false }} />
         </Stack>
       </QueryClientProvider>
     </GestureHandlerRootView>
