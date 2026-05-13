@@ -39,7 +39,7 @@ export async function getRecommendations(userId: string, params: Params) {
        LIMIT  $2`,
       [userId, BATCH_SIZE],
     );
-    names = rows.map(r => r.name);
+    names = rows.map((r: { name: string }) => r.name);
   } else {
     // Cold start: return most popular unswiped names
     const { rows } = await pool.query<{ name: string }>(
@@ -52,8 +52,7 @@ export async function getRecommendations(userId: string, params: Params) {
        LIMIT  $2`,
       [userId, COLD_START_LIMIT],
     );
-    // Trim to batch size after popularity sort
-    names = rows.slice(0, BATCH_SIZE).map(r => r.name);
+    names = rows.slice(0, BATCH_SIZE).map((r: { name: string }) => r.name);
   }
 
   return ok({ names });
