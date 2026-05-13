@@ -17,6 +17,7 @@
 - [ ] Popularity trend (rising / falling / stable)
 - [ ] Famous namesakes
 - [ ] Sibling name compatibility indicator
+- [ ] Name gender split for 2025 
 
 ### AI chat feature
 - [ ] Natural language name exploration ("find me something like Clementine but shorter")
