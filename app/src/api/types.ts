@@ -29,9 +29,17 @@ export interface ListSession {
   filters: Record<string, unknown>;
 }
 
+export interface RankingRow {
+  name: string;
+  count: number;
+  rank: number;
+}
+
 export interface NamesFilters {
   sex?: 'M' | 'F';
-  origin?: string;
+  origins?: string[];
+  listId?: string;
+  deviceId?: string;
   min_rank?: number;
   max_rank?: number;
   limit?: number;

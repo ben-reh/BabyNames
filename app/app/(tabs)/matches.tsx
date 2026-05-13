@@ -1,14 +1,29 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
-import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useList } from '../../src/api/lists';
 import { useSessionStore } from '../../src/store';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 
 export default function MatchesScreen() {
   const router = useRouter();
-  const { listId, code } = useSessionStore();
+  const { listId, code, clearSession } = useSessionStore();
   const { data, isLoading, refetch } = useList(listId);
+
+  const handleDevReset = () => {
+    Alert.alert('Reset session', 'Clear all local data and start fresh?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Reset',
+        style: 'destructive',
+        onPress: async () => {
+          await AsyncStorage.clear();
+          clearSession();
+        },
+      },
+    ]);
+  };
 
   if (isLoading) return <View style={styles.center}><Text style={styles.muted}>Loading...</Text></View>;
 
@@ -19,7 +34,14 @@ export default function MatchesScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Matches</Text>
-        {matches.length > 0 && <Text style={styles.count}>{matches.length}</Text>}
+        <View style={styles.headerRight}>
+          {matches.length > 0 && <Text style={styles.count}>{matches.length}</Text>}
+          {__DEV__ && (
+            <TouchableOpacity onPress={handleDevReset} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+              <Text style={styles.devReset}>⚙</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {!partnerJoined ? (
@@ -63,6 +85,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.lg, paddingTop: spacing.xl + spacing.lg, paddingBottom: spacing.md },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  devReset: { fontSize: fontSize.md, color: colors.textMuted },
   headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
   count: { backgroundColor: colors.primary, color: '#fff', fontSize: fontSize.sm, fontWeight: '700', paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full, overflow: 'hidden' },
   waiting: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },

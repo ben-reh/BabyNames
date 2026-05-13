@@ -24,18 +24,18 @@ const SEX_OPTIONS: { label: string; value: Sex }[] = [
 export default function FilterSheet() {
   const router = useRouter();
   const qc = useQueryClient();
-  const { sex: savedSex, origin: savedOrigin, setSex, setOrigin } = useFilterStore();
+  const { sex: savedSex, origins: savedOrigins, setSex, setOrigins } = useFilterStore();
 
   // Local state — only commit on Apply
   const [sex, setLocalSex] = useState<Sex>(savedSex);
-  const [origin, setLocalOrigin] = useState<string | null>(savedOrigin);
+  const [origins, setLocalOrigins] = useState<string[]>(savedOrigins);
 
-  const hasChanges = sex !== savedSex || origin !== savedOrigin;
-  const activeFilterCount = (sex ? 1 : 0) + (origin ? 1 : 0);
+  const hasChanges = sex !== savedSex || [...origins].sort().join(',') !== [...savedOrigins].sort().join(',');
+  const activeFilterCount = (sex ? 1 : 0) + (origins.length > 0 ? 1 : 0);
 
   const handleApply = () => {
     setSex(sex);
-    setOrigin(origin);
+    setOrigins(origins);
     // Reset swipe deck by invalidating the names cache
     qc.removeQueries({ queryKey: ['names'] });
     router.back();
@@ -43,7 +43,7 @@ export default function FilterSheet() {
 
   const handleReset = () => {
     setLocalSex(null);
-    setLocalOrigin(null);
+    setLocalOrigins([]);
   };
 
   return (
@@ -91,12 +91,12 @@ export default function FilterSheet() {
           <Text style={styles.sectionLabel}>Origin</Text>
           <View style={styles.originGrid}>
             {ORIGINS.map((o) => {
-              const active = origin === o;
+              const active = origins.includes(o);
               return (
                 <TouchableOpacity
                   key={o}
                   style={[styles.originChip, active && styles.originChipActive]}
-                  onPress={() => setLocalOrigin(active ? null : o)}
+                  onPress={() => setLocalOrigins(active ? origins.filter((x) => x !== o) : [...origins, o])}
                 >
                   <Text style={[styles.originChipText, active && styles.originChipTextActive]}>
                     {o}

@@ -1,9 +1,26 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
+import { useSessionStore } from '../../src/store';
 
 export default function Welcome() {
   const router = useRouter();
+  const clearSession = useSessionStore((s) => s.clearSession);
+
+  const handleDevReset = () => {
+    Alert.alert('Reset session', 'Clear all local data and start fresh?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Reset',
+        style: 'destructive',
+        onPress: async () => {
+          await AsyncStorage.clear();
+          clearSession();
+        },
+      },
+    ]);
+  };
 
   return (
     <View style={styles.container}>
@@ -21,6 +38,12 @@ export default function Welcome() {
         <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.push('/(onboarding)/join')}>
           <Text style={styles.secondaryBtnText}>Join partner's list</Text>
         </TouchableOpacity>
+
+        {__DEV__ && (
+          <TouchableOpacity style={styles.devBtn} onPress={handleDevReset}>
+            <Text style={styles.devBtnText}>⚙ Reset session (dev)</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -37,4 +60,6 @@ const styles = StyleSheet.create({
   primaryBtnText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
   secondaryBtn: { backgroundColor: colors.card, borderRadius: radius.lg, padding: spacing.md + 4, alignItems: 'center', borderWidth: 1.5, borderColor: colors.border },
   secondaryBtnText: { color: colors.text, fontSize: fontSize.md, fontWeight: '600' },
+  devBtn: { alignItems: 'center', padding: spacing.sm },
+  devBtnText: { color: colors.textMuted, fontSize: fontSize.sm },
 });

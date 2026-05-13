@@ -13,10 +13,16 @@ interface SessionState {
 
 interface FilterState {
   sex: 'M' | 'F' | null;
-  origin: string | null;
+  origins: string[];
   setSex: (sex: 'M' | 'F' | null) => void;
-  setOrigin: (origin: string | null) => void;
+  setOrigins: (origins: string[]) => void;
   resetFilters: () => void;
+}
+
+interface MatchBannerState {
+  pendingMatch: string | null;
+  showBanner: (name: string) => void;
+  dismissBanner: () => void;
 }
 
 export const useSessionStore = create<SessionState>()(
@@ -35,8 +41,14 @@ export const useSessionStore = create<SessionState>()(
 
 export const useFilterStore = create<FilterState>()((set) => ({
   sex: null,
-  origin: null,
+  origins: [],
   setSex: (sex) => set({ sex }),
-  setOrigin: (origin) => set({ origin }),
-  resetFilters: () => set({ sex: null, origin: null }),
+  setOrigins: (origins) => set({ origins }),
+  resetFilters: () => set({ sex: null, origins: [] }),
+}));
+
+export const useMatchBannerStore = create<MatchBannerState>()((set) => ({
+  pendingMatch: null,
+  showBanner: (name) => set({ pendingMatch: name }),
+  dismissBanner: () => set({ pendingMatch: null }),
 }));

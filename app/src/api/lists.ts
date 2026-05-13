@@ -11,6 +11,7 @@ export function useList(listId: string | null) {
     },
     enabled: !!listId,
     staleTime: 30 * 1000,
+    refetchInterval: 20 * 1000,
     refetchOnWindowFocus: true,
   });
 }

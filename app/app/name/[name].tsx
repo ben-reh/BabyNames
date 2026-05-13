@@ -1,13 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useState } from 'react';
 import { ActivityIndicator, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import { useAddName, useList, useRemoveName } from '../../src/api/lists';
-import { useName, useNamePopularity } from '../../src/api/names';
+import { useName, useNamePopularity, useNameYearRank } from '../../src/api/names';
 import { useSessionStore } from '../../src/store';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 
 const CHART_WIDTH = Dimensions.get('window').width - spacing.lg * 2;
+const GIRL_COLOR = colors.primary;       // pink
+const BOY_COLOR = colors.secondary;      // blue
 
 export default function NameDetail() {
   const router = useRouter();
@@ -15,23 +18,23 @@ export default function NameDetail() {
   const { listId, deviceId, partnerRole } = useSessionStore();
   const { data: nameData, isLoading } = useName(nameParam);
   const { data: popularity } = useNamePopularity(nameParam);
+  const { data: yearRank } = useNameYearRank(nameParam, nameData?.sex ?? 'F');
   const { data: listData } = useList(listId);
   const addName = useAddName(listId!);
   const removeName = useRemoveName(listId!);
 
+  const [showF, setShowF] = useState(true);
+  const [showM, setShowM] = useState(true);
+
   const myNames = partnerRole === 'A'
     ? listData?.partnerA?.names ?? []
     : listData?.partnerB?.names ?? [];
-
   const isInMyList = myNames.includes(nameParam);
 
   const handleToggle = () => {
     if (!deviceId) return;
-    if (isInMyList) {
-      removeName.mutate({ deviceId, name: nameParam });
-    } else {
-      addName.mutate({ deviceId, name: nameParam });
-    }
+    if (isInMyList) removeName.mutate({ deviceId, name: nameParam });
+    else addName.mutate({ deviceId, name: nameParam });
   };
 
   if (isLoading || !nameData) {
@@ -42,12 +45,41 @@ export default function NameDetail() {
     );
   }
 
-  // Build chart data from popularity rows (sample every 5 years to avoid clutter)
-  const chartRows = (popularity ?? []).filter((_, i) => i % 5 === 0);
-  const chartData = {
-    labels: chartRows.map((r) => String(r.year)),
-    datasets: [{ data: chartRows.map((r) => r.count) }],
-  };
+  // Build separate M/F time series aligned on a common year axis
+  const allRows = popularity ?? [];
+  const fByYear = new Map(allRows.filter((r) => r.gender === 'F').map((r) => [r.year, r.count]));
+  const mByYear = new Map(allRows.filter((r) => r.gender === 'M').map((r) => [r.year, r.count]));
+  const allYears = [...new Set(allRows.map((r) => r.year))].sort((a, b) => a - b);
+
+  const hasFData = fByYear.size > 0;
+  const hasMData = mByYear.size > 0;
+
+  // Sample ~20 points for smooth rendering
+  const step = Math.max(1, Math.ceil(allYears.length / 20));
+  const sampledYears = allYears.filter((_, i) => i % step === 0);
+  if (sampledYears.length > 0 && sampledYears[sampledYears.length - 1] !== allYears[allYears.length - 1]) {
+    sampledYears.push(allYears[allYears.length - 1]);
+  }
+
+  const fData = sampledYears.map((y) => fByYear.get(y) ?? 0);
+  const mData = sampledYears.map((y) => mByYear.get(y) ?? 0);
+
+  // Only ~6 visible labels
+  const labelStep = Math.max(1, Math.ceil(sampledYears.length / 6));
+  const labels = sampledYears.map((y, i) =>
+    i % labelStep === 0 || i === sampledYears.length - 1 ? String(y) : '',
+  );
+
+  const datasets = [
+    ...(showF && hasFData ? [{ data: fData, color: (o = 1) => `rgba(232,96,138,${o})`, strokeWidth: 2 }] : []),
+    ...(showM && hasMData ? [{ data: mData, color: (o = 1) => `rgba(91,141,239,${o})`, strokeWidth: 2 }] : []),
+  ];
+  // Fallback to prevent chart crash when both lines are hidden
+  if (datasets.length === 0) {
+    datasets.push({ data: sampledYears.map(() => 0), color: () => 'transparent', strokeWidth: 0 });
+  }
+
+  const showChart = sampledYears.length > 1 && (hasFData || hasMData);
 
   return (
     <View style={styles.container}>
@@ -69,11 +101,6 @@ export default function NameDetail() {
               <Text style={[styles.badgeText, styles.originBadgeText]}>{nameData.origin}</Text>
             </View>
           )}
-          {nameData.rank && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>Rank #{nameData.rank}</Text>
-            </View>
-          )}
         </View>
 
         <View style={styles.statsRow}>
@@ -83,19 +110,35 @@ export default function NameDetail() {
               <Text style={styles.statLabel}>Peak year</Text>
             </View>
           )}
-          {nameData.total_count && (
+          {yearRank?.rank && (
             <View style={styles.stat}>
-              <Text style={styles.statValue}>{(nameData.total_count / 1000).toFixed(0)}K</Text>
-              <Text style={styles.statLabel}>Total given</Text>
+              <Text style={styles.statValue}>#{yearRank.rank}</Text>
+              <Text style={styles.statLabel}>{yearRank.year} rank</Text>
             </View>
           )}
         </View>
 
-        {chartRows.length > 1 && (
+        {showChart && (
           <View style={styles.chartSection}>
-            <Text style={styles.sectionTitle}>Popularity over time</Text>
+            <View style={styles.chartHeader}>
+              <Text style={styles.sectionTitle}>Popularity over time</Text>
+              <View style={styles.legend}>
+                {hasFData && (
+                  <TouchableOpacity style={styles.legendItem} onPress={() => setShowF((v) => !v)}>
+                    <View style={[styles.legendDot, { backgroundColor: GIRL_COLOR }, !showF && styles.legendDotOff]} />
+                    <Text style={[styles.legendLabel, !showF && styles.legendLabelOff]}>Girl</Text>
+                  </TouchableOpacity>
+                )}
+                {hasMData && (
+                  <TouchableOpacity style={styles.legendItem} onPress={() => setShowM((v) => !v)}>
+                    <View style={[styles.legendDot, { backgroundColor: BOY_COLOR }, !showM && styles.legendDotOff]} />
+                    <Text style={[styles.legendLabel, !showM && styles.legendLabelOff]}>Boy</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
             <LineChart
-              data={chartData}
+              data={{ labels, datasets }}
               width={CHART_WIDTH}
               height={180}
               withDots={false}
@@ -106,7 +149,12 @@ export default function NameDetail() {
                 backgroundGradientTo: colors.card,
                 color: () => colors.primary,
                 labelColor: () => colors.textMuted,
-                propsForLabels: { fontSize: 10 },
+                propsForLabels: { fontSize: 9 },
+                // Fill color: blue for boy-only, pink for girl-only, transparent for both
+                fillShadowGradient:
+                  showM && hasMData && !(showF && hasFData) ? BOY_COLOR : GIRL_COLOR,
+                fillShadowGradientOpacity:
+                  showF && hasFData && showM && hasMData ? 0 : 0.15,
               }}
               bezier
               style={{ borderRadius: radius.md }}
@@ -172,9 +220,16 @@ const styles = StyleSheet.create({
   statValue: { fontSize: fontSize.xl, fontWeight: '800', color: colors.text },
   statLabel: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
   chartSection: { marginBottom: spacing.xl },
+  chartHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
+  legend: { flexDirection: 'row', gap: spacing.md },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
+  legendDotOff: { opacity: 0.25 },
+  legendLabel: { fontSize: fontSize.xs, fontWeight: '600', color: colors.text },
+  legendLabelOff: { color: colors.textMuted },
   section: { marginBottom: spacing.xl },
-  sectionTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.text, marginBottom: spacing.sm },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  sectionTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.text },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
   chip: { backgroundColor: colors.primaryLight, borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
   variantChip: { backgroundColor: colors.border },
   chipText: { fontSize: fontSize.sm, color: colors.text, fontWeight: '600' },

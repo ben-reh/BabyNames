@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
-import { useAddName } from '../../src/api/lists';
+import { useAddName, useList } from '../../src/api/lists';
 import { useInfiniteNames } from '../../src/api/names';
 import type { Name } from '../../src/api/types';
 import { useSessionStore, useFilterStore } from '../../src/store';
@@ -12,6 +12,7 @@ import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 
 function NameCard({ name }: { name: Name }) {
   const router = useRouter();
+  if (!name) return <View style={styles.card} />;
   return (
     <TouchableOpacity style={styles.card} onPress={() => router.push(`/name/${name.name}`)} activeOpacity={0.95}>
       <View style={styles.cardContent}>
@@ -22,7 +23,6 @@ function NameCard({ name }: { name: Name }) {
           </View>
         )}
         <View style={styles.cardMeta}>
-          <Text style={styles.metaText}>#{name.rank}</Text>
           {name.year_peak && <Text style={styles.metaText}>Peak {name.year_peak}</Text>}
           <Text style={styles.metaText}>{name.sex === 'F' ? '♀' : '♂'}</Text>
         </View>
@@ -33,26 +33,65 @@ function NameCard({ name }: { name: Name }) {
 
 export default function SwipeScreen() {
   const router = useRouter();
-  const { listId, deviceId } = useSessionStore();
+  const { listId, deviceId, partnerRole } = useSessionStore();
   const filters = useFilterStore();
   const swiperRef = useRef<Swiper<Name>>(null);
   const [queue, setQueue] = useState<Name[]>([]);
   const [cardIndex, setCardIndex] = useState(0);
+  const swipedRef = useRef<Set<string>>(new Set());
   const addName = useAddName(listId!);
+
+  const { data: listData } = useList(listId);
+  const likedNames = useMemo(() => {
+    const partner = partnerRole === 'B' ? listData?.partnerB : listData?.partnerA;
+    return new Set(partner?.names ?? []);
+  }, [listData, partnerRole]);
+  // Ref so queue effects can read current likedNames without it being a trigger
+  const likedNamesRef = useRef(new Set<string>());
+  useEffect(() => { likedNamesRef.current = likedNames; }, [likedNames]);
+
+  // Clear the queue immediately when filters change so the spinner shows before
+  // new data arrives — prevents the Swiper from briefly rendering an empty card.
+  const filterKey = `${filters.sex ?? ''}-${filters.origins.join(',')}`;
+  const prevFilterKey = useRef(filterKey);
+  useEffect(() => {
+    if (prevFilterKey.current !== filterKey) {
+      prevFilterKey.current = filterKey;
+      setQueue([]);
+      setCardIndex(0);
+      swipedRef.current = new Set();
+    }
+  }, [filterKey]);
 
   const { data, fetchNextPage, hasNextPage } = useInfiniteNames({
     sex: filters.sex ?? undefined,
-    origin: filters.origin ?? undefined,
+    origins: filters.origins,
+    listId: listId ?? undefined,
+    deviceId: deviceId ?? undefined,
     limit: 30,
   });
 
+  const prevDataRef = useRef<typeof data>(undefined);
   useEffect(() => {
-    if (data) {
-      const allNames = data.pages.flatMap((p) => p.names);
-      setQueue(allNames);
+    if (!data) return;
+    // Only reset position when this is a genuinely new first-page query,
+    // not when likedNames polling triggers a re-run on the same data.
+    const isNewQuery = data !== prevDataRef.current && data.pages.length === 1;
+    prevDataRef.current = data;
+    if (isNewQuery) {
+      swipedRef.current = new Set();
       setCardIndex(0);
     }
+    const allNames = data.pages.flatMap((p) => p.names);
+    setQueue(allNames.filter((n) => !swipedRef.current.has(n.name) && !likedNamesRef.current.has(n.name)));
   }, [data]);
+
+  // Re-filter the queue when liked names change (no position reset)
+  useEffect(() => {
+    if (!data) return;
+    const allNames = data.pages.flatMap((p) => p.names);
+    setQueue(allNames.filter((n) => !swipedRef.current.has(n.name) && !likedNamesRef.current.has(n.name)));
+  }, [likedNames]);
 
   useEffect(() => {
     if (queue.length - cardIndex < 5 && hasNextPage) {
@@ -65,16 +104,22 @@ export default function SwipeScreen() {
       const name = queue[idx];
       if (!name || !listId || !deviceId) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      swipedRef.current.add(name.name);
       addName.mutate({ deviceId, name: name.name });
       setCardIndex(idx + 1);
     },
     [queue, listId, deviceId, addName],
   );
 
-  const handleSwipedLeft = useCallback((idx: number) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setCardIndex(idx + 1);
-  }, []);
+  const handleSwipedLeft = useCallback(
+    (idx: number) => {
+      const name = queue[idx];
+      if (name) swipedRef.current.add(name.name);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setCardIndex(idx + 1);
+    },
+    [queue],
+  );
 
   if (!queue.length) {
     return (
@@ -89,13 +134,14 @@ export default function SwipeScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Discover</Text>
         <TouchableOpacity onPress={() => router.push('/filter-sheet')} style={styles.filterBtn}>
-          <Ionicons name="options" size={24} color={filters.sex || filters.origin ? colors.primary : colors.text} />
-          {(filters.sex || filters.origin) && <View style={styles.filterDot} />}
+          <Ionicons name="options" size={24} color={filters.sex || filters.origins.length > 0 ? colors.primary : colors.text} />
+          {(filters.sex || filters.origins.length > 0) && <View style={styles.filterDot} />}
         </TouchableOpacity>
       </View>
 
       <View style={styles.deckContainer}>
         <Swiper
+          key={filterKey}
           ref={swiperRef}
           cards={queue}
           cardIndex={cardIndex}
