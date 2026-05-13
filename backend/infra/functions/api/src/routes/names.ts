@@ -1,7 +1,9 @@
-import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchGetCommand, GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE, ORIGIN_INDEX } from '../db/dynamo';
 import { getPool } from '../db/postgres';
 import { ok, err } from '../utils';
+
+const LISTS_TABLE = 'Lists';
 
 type Params = Record<string, string | undefined>;
 
@@ -39,7 +41,7 @@ async function getExcludedNames(topN: number, yearsBack: number, sex?: string): 
 }
 
 export async function getNames(params: Params) {
-  const { sex, origin, exclude_top, years_back, min_rank, max_rank, cursor } = params;
+  const { sex, origin, listId, deviceId, exclude_top, years_back, min_rank, max_rank, cursor } = params;
   const limit = Math.min(parseInt(params.limit || '20', 10), 100);
 
   let excluded: Set<string> | null = null;
@@ -51,13 +53,49 @@ export async function getNames(params: Params) {
     );
   }
 
+  // Fetch list context for personalised scoring
+  let similarityScores = new Map<string, number>();
+  let partnerSet = new Set<string>();
+
+  if (listId && deviceId) {
+    const listResult = await ddb.send(new GetCommand({ TableName: LISTS_TABLE, Key: { listId } }));
+    const list = listResult.Item as Record<string, any> | undefined;
+    if (list) {
+      const isA = list.partnerA?.deviceId === deviceId;
+      const myNames: string[] = isA ? (list.partnerA?.names ?? []) : (list.partnerB?.names ?? []);
+      const theirNames: string[] = isA ? (list.partnerB?.names ?? []) : (list.partnerA?.names ?? []);
+      partnerSet = new Set(theirNames);
+
+      if (myNames.length > 0) {
+        const keys = myNames.slice(-20).map((n) => ({ name: n }));
+        const batch = await ddb.send(new BatchGetCommand({
+          RequestItems: {
+            [TABLE]: {
+              Keys: keys,
+              ProjectionExpression: '#n, similar_names',
+              ExpressionAttributeNames: { '#n': 'name' },
+            },
+          },
+        }));
+        const liked = (batch.Responses?.[TABLE] ?? []) as Array<{ name: string; similar_names?: string[] }>;
+        for (const item of liked) {
+          for (const s of item.similar_names ?? []) {
+            similarityScores.set(s, (similarityScores.get(s) ?? 0) + 1);
+          }
+        }
+      }
+    }
+  }
+
   const lastKey = cursor ? JSON.parse(Buffer.from(cursor, 'base64url').toString()) : undefined;
   let items: Record<string, unknown>[] = [];
   let nextKey: unknown;
 
-  if (origin) {
+  const origins = origin ? origin.split(',').map((o) => o.trim()).filter(Boolean) : [];
+
+  if (origins.length === 1) {
     const filterParts: string[] = [];
-    const attrVals: Record<string, unknown> = { ':origin': origin };
+    const attrVals: Record<string, unknown> = { ':origin': origins[0] };
     if (sex) { filterParts.push('sex = :sex'); attrVals[':sex'] = sex; }
 
     const result = await ddb.send(new QueryCommand({
@@ -66,11 +104,37 @@ export async function getNames(params: Params) {
       KeyConditionExpression: 'origin = :origin',
       FilterExpression: filterParts.length ? filterParts.join(' AND ') : undefined,
       ExpressionAttributeValues: attrVals,
-      Limit: limit * 4,
+      Limit: limit * 8,
       ExclusiveStartKey: lastKey,
     }));
     items = (result.Items ?? []) as Record<string, unknown>[];
     nextKey = result.LastEvaluatedKey;
+  } else if (origins.length > 1) {
+    // Parallel GSI queries per origin — avoids full table scan with low hit rate
+    const perOriginLimit = Math.max(60, limit * 3);
+    const results = await Promise.all(
+      origins.map((o) => {
+        const filterParts: string[] = [];
+        const attrVals: Record<string, unknown> = { ':origin': o };
+        if (sex) { filterParts.push('sex = :sex'); attrVals[':sex'] = sex; }
+        return ddb.send(new QueryCommand({
+          TableName: TABLE,
+          IndexName: ORIGIN_INDEX,
+          KeyConditionExpression: 'origin = :origin',
+          FilterExpression: filterParts.length ? filterParts.join(' AND ') : undefined,
+          ExpressionAttributeValues: attrVals,
+          Limit: perOriginLimit,
+        }));
+      }),
+    );
+    const merged = results.flatMap((r) => (r.Items ?? []) as Record<string, unknown>[]);
+    // Shuffle to interleave origins
+    for (let i = merged.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [merged[i], merged[j]] = [merged[j], merged[i]];
+    }
+    items = merged;
+    nextKey = undefined; // no cursor for multi-origin parallel queries
   } else {
     const filterParts: string[] = [];
     const attrNames: Record<string, string> = {};
@@ -85,7 +149,7 @@ export async function getNames(params: Params) {
       FilterExpression: filterParts.length ? filterParts.join(' AND ') : undefined,
       ExpressionAttributeNames: Object.keys(attrNames).length ? attrNames : undefined,
       ExpressionAttributeValues: Object.keys(attrVals).length ? attrVals : undefined,
-      Limit: limit * 4,
+      Limit: limit * 8,
       ExclusiveStartKey: lastKey,
     }));
     items = (result.Items ?? []) as Record<string, unknown>[];
@@ -93,11 +157,74 @@ export async function getNames(params: Params) {
   }
 
   if (excluded) items = items.filter(i => !excluded!.has(i.name as string));
+
+  // Score and sort: partner-liked first, then similarity-boosted, then popularity + jitter
+  if (partnerSet.size > 0 || similarityScores.size > 0) {
+    const scored = items.map((item) => {
+      const name = item.name as string;
+      let score: number;
+      if (partnerSet.has(name)) {
+        score = 10000;
+      } else {
+        const simScore = (similarityScores.get(name) ?? 0) * 15;
+        const rank = Number(item.rank ?? 99999);
+        const popScore = 100 / Math.sqrt(rank);
+        score = simScore + popScore + Math.random() * 3;
+      }
+      return { item, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    items = scored.map((s) => s.item);
+  }
+
   items = items.slice(0, limit);
 
   return ok({
     names: items.map(formatName),
     cursor: nextKey ? Buffer.from(JSON.stringify(nextKey)).toString('base64url') : null,
+  });
+}
+
+export async function getBatchNames(params: Params) {
+  const names = params.names?.split(',').map((n) => n.trim()).filter(Boolean) ?? [];
+  if (names.length === 0) return ok({ names: [] });
+
+  const keys = names.slice(0, 100).map((n) => ({ name: n }));
+  const result = await ddb.send(new BatchGetCommand({
+    RequestItems: {
+      [TABLE]: {
+        Keys: keys,
+        ProjectionExpression: '#n, sex',
+        ExpressionAttributeNames: { '#n': 'name' },
+      },
+    },
+  }));
+
+  const items = (result.Responses?.[TABLE] ?? []) as Array<{ name: string; sex: string }>;
+  return ok({ names: items.map((i) => ({ name: i.name, sex: i.sex })) });
+}
+
+export async function getRankings(params: Params) {
+  const { sex, year } = params;
+  const limit = Math.min(parseInt(params.limit || '50', 10), 100);
+  const offset = parseInt(params.offset || '0', 10);
+
+  if (!sex || !year) return err(400, 'sex and year are required');
+
+  const { rows } = await getPool().query<{ name: string; count: string; rank: string }>(
+    `SELECT name, count,
+            RANK() OVER (ORDER BY count DESC) AS rank
+     FROM name_popularity
+     WHERE year = $1 AND gender = $2
+     ORDER BY count DESC
+     LIMIT $3 OFFSET $4`,
+    [parseInt(year, 10), sex, limit, offset],
+  );
+
+  return ok({
+    rankings: rows.map((r) => ({ name: r.name, count: Number(r.count), rank: Number(r.rank) })),
+    offset: offset + rows.length,
+    hasMore: rows.length === limit,
   });
 }
 
@@ -112,15 +239,26 @@ export async function searchNames(params: Params) {
   if (!q) return err(400, 'q is required');
 
   const prefix = q[0].toUpperCase() + q.slice(1).toLowerCase();
-  const result = await ddb.send(new ScanCommand({
-    TableName: TABLE,
-    FilterExpression: 'begins_with(#n, :prefix)',
-    ExpressionAttributeNames: { '#n': 'name' },
-    ExpressionAttributeValues: { ':prefix': prefix },
-  }));
-
   const lq = q.toLowerCase();
-  const items = ((result.Items ?? []) as Record<string, unknown>[])
+
+  // Paginate the full scan. ProjectionExpression drops etymology_raw / similar_names,
+  // shrinking items from ~2KB to ~40 bytes so the whole table fits in 3-4 pages.
+  const allMatches: Record<string, unknown>[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const result = await ddb.send(new ScanCommand({
+      TableName: TABLE,
+      FilterExpression: 'begins_with(#n, :prefix)',
+      ExpressionAttributeNames: { '#n': 'name', '#rnk': 'rank' },
+      ExpressionAttributeValues: { ':prefix': prefix },
+      ProjectionExpression: '#n, sex, #rnk, origin',
+      ExclusiveStartKey: lastKey,
+    }));
+    allMatches.push(...((result.Items ?? []) as Record<string, unknown>[]));
+    lastKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (lastKey);
+
+  const items = allMatches
     .filter(i => (i.name as string).toLowerCase().startsWith(lq))
     .sort((a, b) => Number(a.rank ?? 99999) - Number(b.rank ?? 99999))
     .slice(0, 20);

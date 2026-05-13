@@ -158,9 +158,12 @@ export class BabyNamesStack extends cdk.Stack {
     const names = api.root.addResource('names');
     names.addMethod('GET', integration);
     names.addResource('search').addMethod('GET', integration);
+    names.addResource('rankings').addMethod('GET', integration);
+    names.addResource('batch').addMethod('GET', integration);
     const nameParam = names.addResource('{name}');
     nameParam.addMethod('GET', integration);
     nameParam.addResource('popularity').addMethod('GET', integration);
+    nameParam.addResource('rank').addMethod('GET', integration);
 
     // /lists routes
     const lists = api.root.addResource('lists');

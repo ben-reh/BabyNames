@@ -1,6 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { getNames, getName, searchNames } from './routes/names';
-import { getPopularity } from './routes/popularity';
+import { getBatchNames, getNames, getName, getRankings, searchNames } from './routes/names';
+import { getNameRank, getPopularity } from './routes/popularity';
 import { createList, joinList, getList, addName, removeName } from './routes/lists';
 import { err } from './utils';
 
@@ -24,9 +24,22 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return await searchNames(params);
     }
 
+    if (method === 'GET' && path === '/names/rankings') {
+      return await getRankings(params);
+    }
+
+    if (method === 'GET' && path === '/names/batch') {
+      return await getBatchNames(params);
+    }
+
     const popularityMatch = path.match(/^\/names\/([^/]+)\/popularity$/);
     if (method === 'GET' && popularityMatch) {
       return await getPopularity(decodeURIComponent(popularityMatch[1]), params);
+    }
+
+    const rankMatch = path.match(/^\/names\/([^/]+)\/rank$/);
+    if (method === 'GET' && rankMatch) {
+      return await getNameRank(decodeURIComponent(rankMatch[1]), params);
     }
 
     const nameMatch = path.match(/^\/names\/([^/]+)$/);

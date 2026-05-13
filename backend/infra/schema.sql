@@ -1,30 +1,32 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Name feature vectors (loaded from data pipeline).
--- 65 dimensions — see data/scripts/compute_vectors.py for layout.
+-- Drop and recreate name_vectors on each pipeline run (pipeline-owned data).
+DROP TABLE IF EXISTS name_vectors CASCADE;
+
+-- 564 dimensions (52 hand-crafted + 512 OpenAI) — see data/scripts/compute_vectors.py for layout.
 CREATE TABLE name_vectors (
     name        TEXT PRIMARY KEY,
-    embedding   vector(65) NOT NULL
+    embedding   vector(564) NOT NULL,
+    female_pct  FLOAT NOT NULL DEFAULT 0.5
 );
 
 -- IVFFlat index for approximate nearest-neighbor search.
--- lists = 100 is a reasonable default for ~5,000 rows; tune upward if the
--- dataset grows significantly.
+-- lists = 150 ~ sqrt(15,000); tune upward if the dataset grows significantly.
 CREATE INDEX name_vectors_embedding_idx
     ON name_vectors USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+    WITH (lists = 150);
 
 -- Per-user taste vector, updated on every swipe.
-CREATE TABLE user_taste (
+CREATE TABLE IF NOT EXISTS user_taste (
     user_id         TEXT PRIMARY KEY,
-    embedding       vector(65) NOT NULL,
+    embedding       vector(564) NOT NULL,
     liked_count     INT NOT NULL DEFAULT 0,
     disliked_count  INT NOT NULL DEFAULT 0,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Record of every name a user has swiped (used to exclude from recommendations).
-CREATE TABLE user_swipes (
+CREATE TABLE IF NOT EXISTS user_swipes (
     user_id     TEXT NOT NULL,
     name        TEXT NOT NULL,
     liked       BOOLEAN NOT NULL,
@@ -32,4 +34,4 @@ CREATE TABLE user_swipes (
     PRIMARY KEY (user_id, name)
 );
 
-CREATE INDEX user_swipes_user_id_idx ON user_swipes (user_id);
+CREATE INDEX IF NOT EXISTS user_swipes_user_id_idx ON user_swipes (user_id);

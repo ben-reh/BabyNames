@@ -25,3 +25,22 @@ export async function getPopularity(name: string, params: Params) {
   if (rows.length === 0) return err(404, 'No popularity data found');
   return ok({ name, data: rows });
 }
+
+export async function getNameRank(name: string, params: Params) {
+  const year = parseInt(params.year || '2024', 10);
+  const { sex } = params;
+  if (!sex) return err(400, 'sex is required');
+
+  const { rows } = await getPool().query<{ rank: string; count: string }>(
+    `SELECT rank, count FROM (
+       SELECT name, count, RANK() OVER (ORDER BY count DESC) AS rank
+       FROM name_popularity
+       WHERE year = $1 AND gender = $2
+     ) ranked
+     WHERE name = $3`,
+    [year, sex, name],
+  );
+
+  if (rows.length === 0) return ok({ rank: null, count: null, year });
+  return ok({ rank: Number(rows[0].rank), count: Number(rows[0].count), year });
+}
