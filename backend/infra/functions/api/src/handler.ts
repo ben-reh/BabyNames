@@ -2,6 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { getBatchNames, getNames, getName, getRankings, searchNames } from './routes/names';
 import { getNameRank, getPopularity } from './routes/popularity';
 import { createList, joinList, getList, addName, removeName } from './routes/lists';
+import { getRecommendations, recordSwipe } from './routes/recommendations';
 import { err } from './utils';
 
 type Params = Record<string, string | undefined>;
@@ -18,7 +19,20 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   const { httpMethod: method, path, queryStringParameters } = event;
   const params = (queryStringParameters ?? {}) as Params;
 
+  const userId = (event.requestContext as any)?.authorizer?.claims?.sub as string | undefined;
+
   try {
+    // --- Recommendations routes ---
+    if (method === 'GET' && path === '/recommendations') {
+      if (!userId) return err(401, 'Unauthorized');
+      return await getRecommendations(userId, params);
+    }
+
+    if (method === 'POST' && path === '/swipe') {
+      if (!userId) return err(401, 'Unauthorized');
+      return await recordSwipe(userId, parseBody(event));
+    }
+
     // --- Names routes ---
     if (method === 'GET' && path === '/names/search') {
       return await searchNames(params);
