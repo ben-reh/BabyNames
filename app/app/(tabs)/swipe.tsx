@@ -6,25 +6,31 @@ import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'rea
 import Swiper from 'react-native-deck-swiper';
 import { useAddName, useList } from '../../src/api/lists';
 import { useInfiniteNames } from '../../src/api/names';
+import { useInfiniteRecommendations } from '../../src/api/recommendations';
+import { useRecordSwipe } from '../../src/api/swipe';
 import type { Name } from '../../src/api/types';
-import { useSessionStore, useFilterStore } from '../../src/store';
+import { useSessionStore, useFilterStore, useSeenNamesStore } from '../../src/store';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 
-function NameCard({ name }: { name: Name }) {
+const CARD_BG: Record<string, string> = {
+  F: colors.primaryLight,
+  M: '#EEF3FD',
+  U: colors.card,
+  default: colors.card,
+};
+
+function NameCard({ name, sex }: { name: Name; sex: 'F' | 'M' | 'U' | null }) {
   const router = useRouter();
-  if (!name) return <View style={styles.card} />;
+  const cardBg = CARD_BG[sex ?? 'default'] ?? CARD_BG.default;
+  if (!name) return <View style={[styles.card, { backgroundColor: cardBg }]} />;
+  const displayRank = name.rank_2025 ?? name.rank;
   return (
-    <TouchableOpacity style={styles.card} onPress={() => router.push(`/name/${name.name}`)} activeOpacity={0.95}>
+    <TouchableOpacity style={[styles.card, { backgroundColor: cardBg }]} onPress={() => router.push(`/name/${name.name}`)} activeOpacity={0.95}>
       <View style={styles.cardContent}>
         <Text style={styles.cardName}>{name.name}</Text>
-        {name.origin && (
-          <View style={styles.originBadge}>
-            <Text style={styles.originText}>{name.origin}</Text>
-          </View>
-        )}
         <View style={styles.cardMeta}>
           {name.year_peak && <Text style={styles.metaText}>Peak {name.year_peak}</Text>}
-          <Text style={styles.metaText}>{name.sex === 'F' ? '♀' : '♂'}</Text>
+          {displayRank != null && <Text style={styles.metaText}>#{displayRank} in 2025</Text>}
         </View>
       </View>
     </TouchableOpacity>
@@ -35,11 +41,15 @@ export default function SwipeScreen() {
   const router = useRouter();
   const { listId, deviceId, partnerRole } = useSessionStore();
   const filters = useFilterStore();
+  const { seenNames, addSeen } = useSeenNamesStore();
   const swiperRef = useRef<Swiper<Name>>(null);
   const [queue, setQueue] = useState<Name[]>([]);
   const [cardIndex, setCardIndex] = useState(0);
-  const swipedRef = useRef<Set<string>>(new Set());
+  const [deckHeight, setDeckHeight] = useState(0);
+  const seenNamesRef = useRef(seenNames);
+  const cardIndexRef = useRef(0);
   const addName = useAddName(listId!);
+  const { mutate: recordSwipe } = useRecordSwipe();
 
   const { data: listData } = useList(listId);
   const likedNames = useMemo(() => {
@@ -49,51 +59,73 @@ export default function SwipeScreen() {
   // Ref so queue effects can read current likedNames without it being a trigger
   const likedNamesRef = useRef(new Set<string>());
   useEffect(() => { likedNamesRef.current = likedNames; }, [likedNames]);
+  useEffect(() => { seenNamesRef.current = seenNames; }, [seenNames]);
 
-  // Clear the queue immediately when filters change so the spinner shows before
-  // new data arrives — prevents the Swiper from briefly rendering an empty card.
-  const filterKey = `${filters.sex ?? ''}-${filters.origins.join(',')}`;
-  const prevFilterKey = useRef(filterKey);
-  useEffect(() => {
-    if (prevFilterKey.current !== filterKey) {
-      prevFilterKey.current = filterKey;
-      setQueue([]);
-      setCardIndex(0);
-      swipedRef.current = new Set();
-    }
-  }, [filterKey]);
+  const filterKey = `${filters.sex ?? ''}-${filters.origins.join(',')}-${[...filters.popularity].sort().join(',')}`;
+  // committedFilterKey only advances to match filterKey once the queue has been
+  // rebuilt for that filter. Using it as the Swiper key ensures the deck
+  // remounts in the same render that the new queue lands, so the Swiper never
+  // initialises with stale cards.
+  const [committedFilterKey, setCommittedFilterKey] = useState(filterKey);
+  const loadedFilterKeyRef = useRef(filterKey);
 
-  const { data, fetchNextPage, hasNextPage } = useInfiniteNames({
+  const namesResult = useInfiniteNames({
     sex: filters.sex ?? undefined,
     origins: filters.origins,
     listId: listId ?? undefined,
     deviceId: deviceId ?? undefined,
     limit: 30,
   });
+  const recommendationsResult = useInfiniteRecommendations({
+    deviceId: deviceId ?? '',
+    sex: filters.sex ?? undefined,
+    origins: filters.origins,
+    popularity: filters.popularity,
+  });
+  const { data, fetchNextPage, hasNextPage } = deviceId ? recommendationsResult : namesResult;
 
-  const prevDataRef = useRef<typeof data>(undefined);
   useEffect(() => {
-    if (!data) return;
-    // Only reset position when this is a genuinely new first-page query,
-    // not when likedNames polling triggers a re-run on the same data.
-    const isNewQuery = data !== prevDataRef.current && data.pages.length === 1;
-    prevDataRef.current = data;
-    if (isNewQuery) {
-      swipedRef.current = new Set();
+    // No data yet (new query in flight) — clear the deck and wait.
+    if (!data) {
+      setQueue([]);
       setCardIndex(0);
+      cardIndexRef.current = 0;
+      return;
     }
-    const allNames = data.pages.flatMap((p) => p.names);
-    setQueue(allNames.filter((n) => !swipedRef.current.has(n.name) && !likedNamesRef.current.has(n.name)));
-  }, [data]);
 
-  // Re-filter the queue when liked names change (no position reset)
+    const allNames = data.pages
+      .flatMap((p) => p.names)
+      .filter((n) => !seenNamesRef.current[n.name] && !likedNamesRef.current.has(n.name));
+
+    if (loadedFilterKeyRef.current !== filterKey) {
+      // Filter changed — reset to the first card of the new result set.
+      // setCommittedFilterKey is batched with the queue reset so the Swiper
+      // remounts in the same render it receives the new cards (cardIndex=0).
+      loadedFilterKeyRef.current = filterKey;
+      cardIndexRef.current = 0;
+      setCardIndex(0);
+      setQueue(allNames);
+      setCommittedFilterKey(filterKey);
+    } else {
+      // Background refetch — preserve the current card position.
+      setQueue((prev) => {
+        const pos = cardIndexRef.current;
+        const preserved = prev.slice(0, pos + 1);
+        const preservedNames = new Set(preserved.map((n) => n.name));
+        const tail = allNames.filter((n) => !preservedNames.has(n.name));
+        return [...preserved, ...tail];
+      });
+    }
+  }, [filterKey, data]);
+
+  // When liked names change, filter them out of the existing queue in-place
+  // rather than rebuilding — preserves card order for the current session.
   useEffect(() => {
-    if (!data) return;
-    const allNames = data.pages.flatMap((p) => p.names);
-    setQueue(allNames.filter((n) => !swipedRef.current.has(n.name) && !likedNamesRef.current.has(n.name)));
+    setQueue((prev) => prev.filter((n) => !likedNamesRef.current.has(n.name)));
   }, [likedNames]);
 
   useEffect(() => {
+    cardIndexRef.current = cardIndex;
     if (queue.length - cardIndex < 5 && hasNextPage) {
       fetchNextPage();
     }
@@ -104,21 +136,25 @@ export default function SwipeScreen() {
       const name = queue[idx];
       if (!name || !listId || !deviceId) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      swipedRef.current.add(name.name);
+      addSeen(name.name);
       addName.mutate({ deviceId, name: name.name });
+      recordSwipe({ deviceId, name: name.name, liked: true, sex_context: filters.sex });
       setCardIndex(idx + 1);
     },
-    [queue, listId, deviceId, addName],
+    [queue, listId, deviceId, addSeen, addName, recordSwipe],
   );
 
   const handleSwipedLeft = useCallback(
     (idx: number) => {
       const name = queue[idx];
-      if (name) swipedRef.current.add(name.name);
+      if (name) {
+        addSeen(name.name);
+        if (deviceId) recordSwipe({ deviceId, name: name.name, liked: false, sex_context: filters.sex });
+      }
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setCardIndex(idx + 1);
     },
-    [queue],
+    [queue, deviceId, addSeen, recordSwipe],
   );
 
   if (!queue.length) {
@@ -133,22 +169,36 @@ export default function SwipeScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Discover</Text>
-        <TouchableOpacity onPress={() => router.push('/filter-sheet')} style={styles.filterBtn}>
-          <Ionicons name="options" size={24} color={filters.sex || filters.origins.length > 0 ? colors.primary : colors.text} />
-          {(filters.sex || filters.origins.length > 0) && <View style={styles.filterDot} />}
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <View style={styles.sexToggle}>
+            {([['F', '♀ Girl'], ['U', 'Unisex'], ['M', '♂ Boy']] as ['F' | 'U' | 'M', string][]).map(([val, label]) => (
+              <TouchableOpacity
+                key={val}
+                style={[styles.sexSegment, filters.sex === val && styles.sexSegmentActive]}
+                onPress={() => filters.setSex(val)}
+              >
+                <Text style={[styles.sexSegmentText, filters.sex === val && styles.sexSegmentTextActive]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TouchableOpacity onPress={() => router.push('/filter-sheet')} style={styles.filterBtn}>
+            <Ionicons name="options" size={24} color={filters.origins.length > 0 ? colors.primary : colors.text} />
+            {filters.origins.length > 0 && <View style={styles.filterDot} />}
+          </TouchableOpacity>
+        </View>
       </View>
 
-      <View style={styles.deckContainer}>
+      <View style={styles.deckContainer} onLayout={(e) => setDeckHeight(e.nativeEvent.layout.height)}>
         <Swiper
-          key={filterKey}
+          key={committedFilterKey}
           ref={swiperRef}
           cards={queue}
           cardIndex={cardIndex}
-          renderCard={(name) => <NameCard name={name} />}
+          renderCard={(name) => <NameCard name={name} sex={filters.sex} />}
           onSwipedRight={handleSwipedRight}
           onSwipedLeft={handleSwipedLeft}
           backgroundColor="transparent"
+          cardVerticalMargin={deckHeight > 0 ? Math.round(deckHeight * 0.03) : 4}
           stackSize={3}
           stackSeparation={12}
           overlayLabels={{
@@ -158,15 +208,6 @@ export default function SwipeScreen() {
           infinite={false}
           animateOverlayLabelsOpacity
         />
-      </View>
-
-      <View style={styles.actions}>
-        <TouchableOpacity style={[styles.actionBtn, styles.passBtn]} onPress={() => swiperRef.current?.swipeLeft()}>
-          <Ionicons name="close" size={32} color={colors.error} />
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.actionBtn, styles.likeBtn]} onPress={() => swiperRef.current?.swipeRight()}>
-          <Ionicons name="heart" size={32} color={colors.primary} />
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -178,19 +219,19 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.lg, paddingTop: spacing.xl + spacing.lg, paddingBottom: spacing.md },
   headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
   deckContainer: { flex: 1 },
-  card: { height: '100%', borderRadius: radius.xl, backgroundColor: colors.card, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 5 },
+  card: { height: '87%', borderRadius: radius.xl, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 5 },
   cardContent: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.lg },
   cardName: { fontSize: fontSize.xxl, fontWeight: '900', color: colors.text },
-  originBadge: { backgroundColor: colors.primaryLight, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radius.full },
-  originText: { fontSize: fontSize.sm, color: colors.primary, fontWeight: '600' },
   cardMeta: { flexDirection: 'row', gap: spacing.md },
   metaText: { fontSize: fontSize.md, color: colors.textMuted },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  sexToggle: { flexDirection: 'row', backgroundColor: colors.border, borderRadius: radius.full, padding: 2 },
+  sexSegment: { paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.full },
+  sexSegmentActive: { backgroundColor: colors.card },
+  sexSegmentText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textMuted },
+  sexSegmentTextActive: { color: colors.text },
   filterBtn: { position: 'relative' },
   filterDot: { position: 'absolute', top: -2, right: -2, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
-  actions: { flexDirection: 'row', justifyContent: 'center', gap: spacing.xl, paddingBottom: spacing.xl + spacing.lg, paddingTop: spacing.lg },
-  actionBtn: { width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 6, elevation: 3 },
-  passBtn: { backgroundColor: colors.card, borderWidth: 1.5, borderColor: colors.error + '40' },
-  likeBtn: { backgroundColor: colors.card, borderWidth: 1.5, borderColor: colors.primary + '40' },
   overlayNope: { fontSize: 32, fontWeight: '900', color: colors.error, borderWidth: 3, borderColor: colors.error, padding: spacing.sm, borderRadius: radius.sm },
   overlayLike: { fontSize: 32, fontWeight: '900', color: colors.success, borderWidth: 3, borderColor: colors.success, padding: spacing.sm, borderRadius: radius.sm },
   overlayWrapperLeft: { flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'flex-start', marginTop: 30, marginLeft: -30 },

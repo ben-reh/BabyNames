@@ -8,6 +8,8 @@ jest.mock('../../db/postgres', () => ({
 const FAKE_USER = 'user-123';
 const FAKE_EMBEDDING = '[0.1,0.2,0.3]';
 const FAKE_NAMES = ['Emma', 'Olivia', 'Ava', 'Sophia', 'Isabella'];
+const FAKE_SIMILARITY_NAMES = Array.from({ length: 17 }, (_, i) => `SimilarName${i}`);
+const FAKE_EXPLORATION_NAMES = Array.from({ length: 3 }, (_, i) => `ExploreName${i}`);
 
 beforeEach(() => {
   mockQuery.mockReset();
@@ -34,30 +36,47 @@ describe('getRecommendations', () => {
     expect(coldStartSql).toMatch(/2025/);
   });
 
-  it('taste-based — uses ANN query when user has a taste vector', async () => {
+  it('taste-based — uses ANN similarity + exploration queries and returns 20 merged names', async () => {
     mockQuery
-      .mockResolvedValueOnce({ rows: [{ embedding: FAKE_EMBEDDING }] }) // user_taste → exists
-      .mockResolvedValueOnce({ rows: FAKE_NAMES.map(name => ({ name })) }); // ANN query
+      .mockResolvedValueOnce({ rows: [{ embedding: FAKE_EMBEDDING }] })                          // user_taste → exists
+      .mockResolvedValueOnce({ rows: FAKE_SIMILARITY_NAMES.map(name => ({ name })) })            // similarity ANN query
+      .mockResolvedValueOnce({ rows: FAKE_EXPLORATION_NAMES.map(name => ({ name })) });          // exploration ANN query
 
     const result = await getRecommendations(FAKE_USER, {});
 
     expect(result.statusCode).toBe(200);
     const body = JSON.parse(result.body);
-    expect(body.names).toEqual(FAKE_NAMES);
+    expect(body.names).toHaveLength(20);
 
-    const annSql = mockQuery.mock.calls[1][0] as string;
-    expect(annSql).toMatch(/<=>/);       // pgvector cosine distance operator
-    expect(annSql).toMatch(/user_taste/);
-    expect(annSql).toMatch(/user_swipes/); // excludes already-swiped names
+    // All similarity and exploration names should appear in the merged result
+    expect(body.names).toEqual(expect.arrayContaining(FAKE_SIMILARITY_NAMES));
+    expect(body.names).toEqual(expect.arrayContaining(FAKE_EXPLORATION_NAMES));
+
+    // Taste lookup + similarity query + exploration query = 3 calls
+    expect(mockQuery).toHaveBeenCalledTimes(3);
+
+    const similaritySql = mockQuery.mock.calls[1][0] as string;
+    expect(similaritySql).toMatch(/<=>/);        // pgvector cosine distance operator
+    expect(similaritySql).toMatch(/user_taste/);
+    expect(similaritySql).toMatch(/user_swipes/); // excludes already-swiped names
+
+    const explorationSql = mockQuery.mock.calls[2][0] as string;
+    expect(explorationSql).toMatch(/<=>/);
+    expect(explorationSql).toMatch(/name_popularity/);
+    expect(explorationSql).toMatch(/np\.year = 2024/);
+    expect(explorationSql).toMatch(/np\.count >= \$2/);
+    expect(explorationSql).toMatch(/np\.count < \$3/);
   });
 
   it('applies F sex filter', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ embedding: FAKE_EMBEDDING }] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })  // similarity
+      .mockResolvedValueOnce({ rows: [] }); // exploration
 
     await getRecommendations(FAKE_USER, { sex: 'F' });
 
+    // Filter is applied to both queries; check similarity query (call index 1)
     const sql = mockQuery.mock.calls[1][0] as string;
     expect(sql).toMatch(/female_pct >= 0.1/);
   });
@@ -65,7 +84,8 @@ describe('getRecommendations', () => {
   it('applies M sex filter', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ embedding: FAKE_EMBEDDING }] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })  // similarity
+      .mockResolvedValueOnce({ rows: [] }); // exploration
 
     await getRecommendations(FAKE_USER, { sex: 'M' });
 
@@ -76,7 +96,8 @@ describe('getRecommendations', () => {
   it('applies U sex filter', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ embedding: FAKE_EMBEDDING }] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })  // similarity
+      .mockResolvedValueOnce({ rows: [] }); // exploration
 
     await getRecommendations(FAKE_USER, { sex: 'U' });
 
@@ -88,7 +109,8 @@ describe('getRecommendations', () => {
   it('applies no sex filter when sex param is omitted', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ embedding: FAKE_EMBEDDING }] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })  // similarity
+      .mockResolvedValueOnce({ rows: [] }); // exploration
 
     await getRecommendations(FAKE_USER, {});
 
@@ -99,7 +121,8 @@ describe('getRecommendations', () => {
   it('returns empty names array when no candidates match', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ embedding: FAKE_EMBEDDING }] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })  // similarity
+      .mockResolvedValueOnce({ rows: [] }); // exploration
 
     const result = await getRecommendations(FAKE_USER, {});
     const body = JSON.parse(result.body);

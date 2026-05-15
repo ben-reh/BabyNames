@@ -20,7 +20,7 @@ export default function Create() {
   const handleContinue = () => {
     if (!data || !deviceId) return;
     setSession({ listId: data.listId, deviceId, partnerRole: 'A', code: data.code });
-    router.replace('/(tabs)/swipe');
+    router.replace('/(onboarding)/name-favorites');
   };
 
   if (isPending || !data) {

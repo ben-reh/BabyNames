@@ -168,6 +168,8 @@ export class BabyNamesStack extends cdk.Stack {
     // /recommendations + /swipe routes
     api.root.addResource('recommendations').addMethod('GET', integration);
     api.root.addResource('swipe').addMethod('POST', integration);
+    api.root.addResource('swipes').addMethod('GET', integration);
+
 
     // /lists routes
     const lists = api.root.addResource('lists');

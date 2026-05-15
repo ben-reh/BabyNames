@@ -2,9 +2,11 @@ export interface Name {
   name: string;
   sex: 'M' | 'F';
   rank: number | null;
+  rank_2025: number | null;
   origin: string | null;
   year_peak: number | null;
   total_count: number | null;
+  female_pct: number | null;
   similar_names: string[];
   spelling_variants: string[];
 }
@@ -36,7 +38,7 @@ export interface RankingRow {
 }
 
 export interface NamesFilters {
-  sex?: 'M' | 'F';
+  sex?: 'M' | 'F' | 'U';
   origins?: string[];
   listId?: string;
   deviceId?: string;

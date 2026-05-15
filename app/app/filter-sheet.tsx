@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -9,41 +9,75 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { api } from '../src/api/client';
 import { ORIGINS } from '../src/constants/origins';
 import { colors, fontSize, radius, spacing } from '../src/constants/theme';
-import { useFilterStore } from '../src/store';
+import { useFilterStore, useSessionStore } from '../src/store';
 
-type Sex = 'M' | 'F' | null;
+type Sex = 'M' | 'F' | 'U';
 
 const SEX_OPTIONS: { label: string; value: Sex }[] = [
-  { label: 'Any', value: null },
-  { label: 'Girl ♀', value: 'F' },
-  { label: 'Boy ♂', value: 'M' },
+  { label: '♀ Girl', value: 'F' },
+  { label: 'Unisex', value: 'U' },
+  { label: '♂ Boy', value: 'M' },
+];
+
+const POPULARITY_OPTIONS = [
+  { value: 'popular',  label: 'Popular',  subtitle: 'Top ~50' },
+  { value: 'familiar', label: 'Familiar', subtitle: 'Top ~200' },
+  { value: 'unique',   label: 'Unique',   subtitle: 'Below top 200' },
 ];
 
 export default function FilterSheet() {
   const router = useRouter();
   const qc = useQueryClient();
-  const { sex: savedSex, origins: savedOrigins, setSex, setOrigins } = useFilterStore();
+  const { deviceId } = useSessionStore();
+  const { sex: savedSex, origins: savedOrigins, popularity: savedPopularity, setSex, setOrigins, setPopularity } = useFilterStore();
 
   // Local state — only commit on Apply
-  const [sex, setLocalSex] = useState<Sex>(savedSex);
+  const [sex, setLocalSex] = useState<Sex>(savedSex ?? 'F');
   const [origins, setLocalOrigins] = useState<string[]>(savedOrigins);
+  const [popularity, setLocalPopularity] = useState<string[]>(savedPopularity);
 
-  const hasChanges = sex !== savedSex || [...origins].sort().join(',') !== [...savedOrigins].sort().join(',');
-  const activeFilterCount = (sex ? 1 : 0) + (origins.length > 0 ? 1 : 0);
+  const hasChanges =
+    sex !== savedSex ||
+    [...origins].sort().join(',') !== [...savedOrigins].sort().join(',') ||
+    [...popularity].sort().join(',') !== [...savedPopularity].sort().join(',');
+  const activeFilterCount = (origins.length > 0 ? 1 : 0) + (popularity.length > 0 ? 1 : 0);
+
+  // Prefetch recommendations in the background as the user adjusts filters so
+  // the data is already cached by the time they tap Apply.
+  useEffect(() => {
+    if (!deviceId || !hasChanges) return;
+    const timer = setTimeout(() => {
+      qc.prefetchInfiniteQuery({
+        queryKey: ['recommendations', deviceId, sex, origins, popularity],
+        queryFn: async () => {
+          const params: Record<string, string> = { deviceId };
+          if (sex) params.sex = sex;
+          if (origins.length) params.origins = origins.join(',');
+          if (popularity.length) params.popularity = popularity.join(',');
+          const { data } = await api.get<{ names: unknown[] }>('/recommendations', { params });
+          return data;
+        },
+        initialPageParam: 0,
+        getNextPageParam: (_: unknown, allPages: unknown[]) => allPages.length,
+      });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [sex, origins, popularity, deviceId, hasChanges, qc]);
 
   const handleApply = () => {
     setSex(sex);
     setOrigins(origins);
-    // Reset swipe deck by invalidating the names cache
-    qc.removeQueries({ queryKey: ['names'] });
+    setPopularity(popularity);
     router.back();
   };
 
   const handleReset = () => {
-    setLocalSex(null);
+    setLocalSex('U');
     setLocalOrigins([]);
+    setLocalPopularity([]);
   };
 
   return (
@@ -83,6 +117,30 @@ export default function FilterSheet() {
                 </Text>
               </TouchableOpacity>
             ))}
+          </View>
+        </View>
+
+        {/* Popularity filter */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Popularity</Text>
+          <View style={styles.originGrid}>
+            {POPULARITY_OPTIONS.map((opt) => {
+              const active = popularity.includes(opt.value);
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[styles.popularityChip, active && styles.originChipActive]}
+                  onPress={() => setLocalPopularity(active ? popularity.filter((x) => x !== opt.value) : [...popularity, opt.value])}
+                >
+                  <Text style={[styles.originChipText, active && styles.originChipTextActive]}>
+                    {opt.label}
+                  </Text>
+                  <Text style={[styles.popularitySubtitle, active && styles.originChipTextActive]}>
+                    {opt.subtitle}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
 
@@ -201,6 +259,17 @@ const styles = StyleSheet.create({
   },
   originChipText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '500' },
   originChipTextActive: { color: colors.primary, fontWeight: '700' },
+  popularityChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    minWidth: 100,
+  },
+  popularitySubtitle: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
   footer: {
     padding: spacing.lg,
     paddingBottom: spacing.xl + spacing.lg,

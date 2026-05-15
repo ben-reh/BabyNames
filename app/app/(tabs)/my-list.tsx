@@ -1,134 +1,520 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useList, useRemoveName } from '../../src/api/lists';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  KeyboardAvoidingView,
+  LayoutAnimation,
+  Modal,
+  PanResponder,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { api } from '../../src/api/client';
+import { useJoinList, useList } from '../../src/api/lists';
 import { useNamesBatch } from '../../src/api/names';
-import { useSessionStore } from '../../src/store';
+import { useSwipedNames } from '../../src/api/swipe';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
+import { useSessionStore, useListOrderStore } from '../../src/store';
 
-type SexFilter = 'any' | 'F' | 'M';
+type SexFilter = 'F' | 'M' | 'U';
 
 const SEX_OPTIONS: { label: string; value: SexFilter }[] = [
-  { label: 'Any', value: 'any' },
-  { label: 'Girl ♀', value: 'F' },
-  { label: 'Boy ♂', value: 'M' },
+  { label: '♀ Girl', value: 'F' },
+  { label: 'Unisex', value: 'U' },
+  { label: '♂ Boy', value: 'M' },
 ];
 
-export default function MyListScreen() {
+function SectionHeader({
+  title,
+  count,
+  expanded,
+  onToggle,
+  right,
+}: {
+  title: string;
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+  right?: React.ReactNode;
+}) {
+  return (
+    <TouchableOpacity style={styles.sectionHeader} onPress={onToggle} activeOpacity={0.7}>
+      <View style={styles.sectionHeaderLeft}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        <View style={styles.countBadge}>
+          <Text style={styles.countBadgeText}>{count}</Text>
+        </View>
+      </View>
+      <View style={styles.sectionHeaderRight}>
+        {right}
+        <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textMuted} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+const ITEM_HEIGHT = 58; // nameCard padding + text + marginBottom
+
+function NameRow({ name, onPress, onRemove }: { name: string; onPress: () => void; onRemove?: () => void }) {
+  return (
+    <TouchableOpacity style={styles.nameCard} onPress={onPress} activeOpacity={0.7}>
+      <View style={styles.nameRow}>
+        <Text style={styles.nameText}>{name}</Text>
+      </View>
+      {onRemove && (
+        <TouchableOpacity onPress={onRemove} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+          <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
+        </TouchableOpacity>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+function DraggableNameRow({
+  name,
+  isActive,
+  dragY,
+  onPress,
+  gripHandlers,
+}: {
+  name: string;
+  isActive: boolean;
+  dragY: Animated.Value;
+  onPress: () => void;
+  gripHandlers: ReturnType<typeof PanResponder.create>['panHandlers'];
+}) {
+  return (
+    <Animated.View
+      style={[
+        styles.nameCard,
+        isActive && styles.nameCardDragging,
+        isActive && { transform: [{ translateY: dragY }], zIndex: 99 },
+      ]}
+    >
+      <TouchableOpacity style={styles.nameRow} onPress={onPress} activeOpacity={0.7}>
+        <Text style={styles.nameText}>{name}</Text>
+      </TouchableOpacity>
+      <View hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }} {...gripHandlers}>
+        <Ionicons name="reorder-three-outline" size={24} color={isActive ? colors.primary : colors.textMuted} />
+      </View>
+    </Animated.View>
+  );
+}
+
+export default function MyListsScreen() {
   const router = useRouter();
-  const { listId, deviceId, partnerRole } = useSessionStore();
+  const { listId, deviceId, partnerRole, code, setSession, clearSession, defaultSex } = useSessionStore();
+  const [sexFilter, setSexFilter] = useState<SexFilter>(() => (defaultSex === 'F' || defaultSex === 'M' ? defaultSex : 'U'));
   const { data, isLoading, refetch } = useList(listId);
-  const removeName = useRemoveName(listId!);
-  const [sexFilter, setSexFilter] = useState<SexFilter>('any');
+  const { data: likedSwipes = [] } = useSwipedNames(deviceId, true, sexFilter);
+  const { data: passedNames = [] } = useSwipedNames(deviceId, false, sexFilter);
+  const { mutate: joinList, isPending: isJoining, error: joinError, reset: resetJoin } = useJoinList();
+  const [likedExpanded, setLikedExpanded] = useState(false);
+  const [matchesExpanded, setMatchesExpanded] = useState(false);
+  const [passedExpanded, setPassedExpanded] = useState(false);
+  const [search, setSearch] = useState('');
 
-  const myNames = partnerRole === 'A'
-    ? data?.partnerA?.names ?? []
-    : data?.partnerB?.names ?? [];
+  useEffect(() => {
+    AsyncStorage.getItem('seen_my_lists').then((val) => {
+      if (val === null) {
+        setMatchesExpanded(true);
+        AsyncStorage.setItem('seen_my_lists', '1');
+      }
+    });
+  }, []);
+  const [showJoinModal, setShowJoinModal] = useState(false);
+  const [joinCode, setJoinCode] = useState('');
+  const joinInputRef = useRef<TextInput>(null);
 
-  const { data: sexMap } = useNamesBatch(myNames);
+  const myNames = partnerRole === 'A' ? data?.partnerA?.names ?? [] : data?.partnerB?.names ?? [];
+  const matches = data?.matches ?? [];
+  const partnerJoined = data?.partnerCount === 2;
 
-  const filtered = sexFilter === 'any'
-    ? myNames
-    : myNames.filter((n) => sexMap?.get(n) === sexFilter);
+  const allNames = [...new Set([...myNames, ...matches, ...passedNames])];
+  const { data: sexMap } = useNamesBatch(allNames);
 
-  if (isLoading) return <View style={styles.center}><Text style={styles.muted}>Loading...</Text></View>;
+  function applyFilter(names: string[]) {
+    return names.filter((n) => {
+      const entry = sexMap?.get(n);
+      const unknownDefault = defaultSex === 'F' ? 1 : defaultSex === 'M' ? 0 : 0.5;
+      const femalePct = entry == null ? unknownDefault : (entry.female_pct ?? (entry.sex === 'F' ? 1 : 0));
+      if (sexFilter === 'F') return femalePct >= 0.05;
+      if (sexFilter === 'M') return femalePct <= 0.95;
+      if (sexFilter === 'U') return femalePct > 0.05 && femalePct < 0.95;
+      return true;
+    });
+  }
+
+  // Stable fallback — avoids the [] !== [] infinite re-render loop in useSyncExternalStore
+  const EMPTY_ORDER = useRef<string[]>([]).current;
+  const storedOrder = useListOrderStore((s) => s.orders[listId ?? ''] ?? EMPTY_ORDER);
+  const setOrder = useListOrderStore((s) => s.setOrder);
+
+  const likedSwipesSet = useMemo(() => new Set(likedSwipes), [likedSwipes]);
+  const matchSearch = (n: string) => !search || n.toLowerCase().includes(search.toLowerCase());
+
+  const baseLiked = useMemo(
+    () => myNames.filter((n) => likedSwipesSet.has(n)),
+    [myNames, likedSwipesSet],
+  );
+  const orderedLiked = useMemo(() => {
+    const likedSet = new Set(baseLiked);
+    const ordered = storedOrder.filter((n) => likedSet.has(n));
+    const inOrder = new Set(ordered);
+    return [...ordered, ...baseLiked.filter((n) => !inOrder.has(n))];
+  }, [baseLiked, storedOrder]);
+  const filteredLiked = orderedLiked.filter(matchSearch);
+
+  // Drag-to-reorder state — declared after orderedLiked so the ref is valid
+  const [draggingName, setDraggingName] = useState<string | null>(null);
+  const dragY = useRef(new Animated.Value(0)).current;
+  const orderedLikedRef = useRef(orderedLiked);
+  useEffect(() => { orderedLikedRef.current = orderedLiked; }, [orderedLiked]);
+
+  const makeDragHandlers = (name: string, idx: number) =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        dragY.setValue(0);
+        setDraggingName(name);
+      },
+      onPanResponderMove: (_, { dy }) => dragY.setValue(dy),
+      onPanResponderRelease: (_, { dy }) => {
+        const list = orderedLikedRef.current;
+        const toIdx = Math.max(0, Math.min(list.length - 1, idx + Math.round(dy / ITEM_HEIGHT)));
+        if (toIdx !== idx && listId) {
+          LayoutAnimation.easeInEaseOut();
+          const next = [...list];
+          const [item] = next.splice(idx, 1);
+          next.splice(toIdx, 0, item);
+          setOrder(listId, next);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }
+        dragY.setValue(0);
+        setDraggingName(null);
+      },
+      onPanResponderTerminate: () => { dragY.setValue(0); setDraggingName(null); },
+    }).panHandlers;
+
+  const filteredMatches = applyFilter(matches).filter(matchSearch);
+  const filteredPassed = passedNames.filter(matchSearch);
+
+  const openJoinModal = () => {
+    resetJoin();
+    setJoinCode('');
+    setShowJoinModal(true);
+  };
+
+  const closeJoinModal = () => {
+    setShowJoinModal(false);
+    setJoinCode('');
+    resetJoin();
+  };
+
+  const doJoin = (carryOver: boolean) => {
+    if (!deviceId) return;
+    joinList(
+      { code: joinCode, deviceId },
+      {
+        onSuccess: async (result) => {
+          if (carryOver && myNames.length > 0) {
+            for (const name of myNames) {
+              try {
+                await api.post(`/lists/${result.listId}/names`, { deviceId, name });
+              } catch {}
+            }
+          }
+          setSession({ listId: result.listId, deviceId, partnerRole: result.role, code: joinCode });
+          closeJoinModal();
+        },
+      },
+    );
+  };
+
+  const handleJoin = () => {
+    if (!deviceId || joinCode.length < 6) return;
+    if (myNames.length > 0) {
+      Alert.alert(
+        'Carry over your liked names?',
+        `You have ${myNames.length} liked ${myNames.length === 1 ? 'name' : 'names'}. Add them to the new list?`,
+        [
+          { text: 'Start fresh', style: 'cancel', onPress: () => doJoin(false) },
+          { text: 'Carry over', onPress: () => doJoin(true) },
+        ],
+      );
+    } else {
+      doJoin(false);
+    }
+  };
+
+  const handleDevReset = () => {
+    Alert.alert('Reset session', 'Clear all local data and start fresh?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Reset',
+        style: 'destructive',
+        onPress: async () => {
+          await AsyncStorage.clear();
+          clearSession();
+        },
+      },
+    ]);
+  };
+
+  if (isLoading) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.muted}>Loading...</Text>
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>My List</Text>
-        <Text style={styles.count}>{filtered.length} names</Text>
-      </View>
-
-      <View style={styles.segmentedRow}>
-        <View style={styles.segmented}>
-          {SEX_OPTIONS.map((opt) => (
-            <TouchableOpacity
-              key={opt.value}
-              style={[styles.segment, sexFilter === opt.value && styles.segmentActive]}
-              onPress={() => setSexFilter(opt.value)}
-            >
-              <Text style={[styles.segmentText, sexFilter === opt.value && styles.segmentTextActive]}>
-                {opt.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+    <>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>My Lists</Text>
         </View>
-      </View>
 
-      {filtered.length === 0 ? (
-        <View style={styles.empty}>
-          <Text style={styles.emptyEmoji}>{myNames.length === 0 ? '💝' : '🔍'}</Text>
-          <Text style={styles.emptyTitle}>
-            {myNames.length === 0 ? 'No names yet' : 'No names match'}
-          </Text>
-          <Text style={styles.emptyText}>
-            {myNames.length === 0
-              ? 'Swipe right on names you love to add them here'
-              : 'Try a different filter'}
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={filtered}
-          keyExtractor={(name) => name}
-          onRefresh={refetch}
-          refreshing={isLoading}
-          contentContainerStyle={styles.list}
-          renderItem={({ item: name }) => {
-            const sex = sexMap?.get(name);
-            return (
-              <TouchableOpacity style={styles.nameCard} onPress={() => router.push(`/name/${name}`)}>
-                <View style={styles.nameRow}>
-                  {sex && (
-                    <Text style={[styles.sexIcon, sex === 'F' ? styles.sexF : styles.sexM]}>
-                      {sex === 'F' ? '♀' : '♂'}
-                    </Text>
-                  )}
-                  <Text style={styles.nameText}>{name}</Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => removeName.mutate({ deviceId: deviceId!, name })}
-                  hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
-                >
-                  <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
-                </TouchableOpacity>
+        <View style={styles.segmentedRow}>
+          <View style={styles.segmented}>
+            {SEX_OPTIONS.map((opt) => (
+              <TouchableOpacity
+                key={opt.value}
+                style={[styles.segment, sexFilter === opt.value && styles.segmentActive]}
+                onPress={() => setSexFilter(opt.value)}
+              >
+                <Text style={[styles.segmentText, sexFilter === opt.value && styles.segmentTextActive]}>
+                  {opt.label}
+                </Text>
               </TouchableOpacity>
-            );
-          }}
-        />
-      )}
-    </View>
+            ))}
+          </View>
+        </View>
+
+        <View style={styles.searchBarRow}>
+          <View style={styles.searchBar}>
+            <Ionicons name="search" size={18} color={colors.textMuted} style={styles.searchIcon} />
+            <TextInput
+              style={styles.searchInput}
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Filter names…"
+              placeholderTextColor={colors.textMuted}
+              autoCorrect={false}
+              autoCapitalize="none"
+              clearButtonMode="while-editing"
+            />
+          </View>
+        </View>
+
+        {/* Liked section */}
+        <View style={styles.section}>
+          <SectionHeader
+            title="Liked"
+            count={filteredLiked.length}
+            expanded={likedExpanded}
+            onToggle={() => setLikedExpanded((v) => !v)}
+          />
+          {likedExpanded && (
+            filteredLiked.length === 0 ? (
+              <View style={styles.emptySection}>
+                <Text style={styles.muted}>
+                  {myNames.length === 0 ? 'Swipe right on names to add them here' : 'No names match this filter'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.sectionList}>
+                {filteredLiked.map((name, idx) => (
+                  <DraggableNameRow
+                    key={name}
+                    name={name}
+                    isActive={draggingName === name}
+                    dragY={dragY}
+                    onPress={() => router.push(`/name/${name}`)}
+                    gripHandlers={makeDragHandlers(name, idx)}
+                  />
+                ))}
+              </View>
+            )
+          )}
+        </View>
+
+        {/* Matches section */}
+        <View style={styles.section}>
+          <SectionHeader
+            title="Matches"
+            count={filteredMatches.length}
+            expanded={matchesExpanded}
+            onToggle={() => setMatchesExpanded((v) => !v)}
+            right={
+              __DEV__ ? (
+                <TouchableOpacity onPress={handleDevReset} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+                  <Text style={styles.devReset}>⚙</Text>
+                </TouchableOpacity>
+              ) : undefined
+            }
+          />
+          {matchesExpanded && (
+            !partnerJoined ? (
+              <View style={styles.waitingSection}>
+                <Text style={styles.waitingText}>Share this code so your partner can join</Text>
+                <TouchableOpacity
+                  style={styles.codeBox}
+                  onPress={() => code && Clipboard.setStringAsync(code)}
+                >
+                  <Text style={styles.codeText}>{code}</Text>
+                  <Text style={styles.copyHint}>Tap to copy</Text>
+                </TouchableOpacity>
+                <View style={styles.dividerRow}>
+                  <View style={styles.divider} />
+                  <Text style={styles.dividerText}>or</Text>
+                  <View style={styles.divider} />
+                </View>
+                <TouchableOpacity style={styles.joinCodeBtn} onPress={openJoinModal}>
+                  <Text style={styles.joinCodeBtnText}>Enter partner's code</Text>
+                </TouchableOpacity>
+              </View>
+            ) : filteredMatches.length === 0 ? (
+              <View style={styles.emptySection}>
+                <Text style={styles.muted}>
+                  {matches.length === 0
+                    ? 'Matches appear when you both like the same name'
+                    : 'No matches match this filter'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.sectionList}>
+                {filteredMatches.map((name) => (
+                  <TouchableOpacity
+                    key={name}
+                    style={[styles.nameCard, styles.matchCard]}
+                    onPress={() => router.push(`/name/${name}`)}
+                  >
+                    <View style={styles.nameRow}>
+                      <Text style={styles.nameText}>{name}</Text>
+                    </View>
+                    <Text style={styles.matchEmoji}>✨</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )
+          )}
+        </View>
+
+        {/* Passed section */}
+        <View style={styles.section}>
+          <SectionHeader
+            title="Passed"
+            count={filteredPassed.length}
+            expanded={passedExpanded}
+            onToggle={() => setPassedExpanded((v) => !v)}
+          />
+          {passedExpanded && (
+            filteredPassed.length === 0 ? (
+              <View style={styles.emptySection}>
+                <Text style={styles.muted}>
+                  {passedNames.length === 0 ? 'Names you skip will appear here' : 'No names match this filter'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.sectionList}>
+                {filteredPassed.map((name) => (
+                  <NameRow
+                    key={name}
+                    name={name}
+                    onPress={() => router.push(`/name/${name}`)}
+                  />
+                ))}
+              </View>
+            )
+          )}
+        </View>
+      </ScrollView>
+
+      <Modal
+        visible={showJoinModal}
+        transparent
+        animationType="slide"
+        onRequestClose={closeJoinModal}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={closeJoinModal} />
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Enter partner's code</Text>
+            <Text style={styles.modalSubtitle}>Ask your partner for their 6-character share code</Text>
+
+            <TextInput
+              ref={joinInputRef}
+              style={styles.codeInput}
+              value={joinCode}
+              onChangeText={(t) => {
+                setJoinCode(t.toUpperCase().slice(0, 6));
+                if (joinError) resetJoin();
+              }}
+              placeholder="ABC123"
+              placeholderTextColor={colors.border}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={6}
+              autoFocus
+            />
+
+            {joinError && (
+              <Text style={styles.errorText}>Code not found or list is full</Text>
+            )}
+
+            <TouchableOpacity
+              style={[styles.joinBtn, (joinCode.length < 6 || isJoining) && styles.joinBtnDisabled]}
+              onPress={handleJoin}
+              disabled={joinCode.length < 6 || isJoining}
+            >
+              {isJoining ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.joinBtnText}>Join list</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.cancelBtn} onPress={closeJoinModal}>
+              <Text style={styles.cancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  content: { paddingBottom: spacing.xl },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xl + spacing.lg,
     paddingBottom: spacing.sm,
   },
   headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
-  count: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '600' },
   segmentedRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
-  segmented: {
-    flexDirection: 'row',
-    backgroundColor: colors.border,
-    borderRadius: radius.md,
-    padding: 3,
-  },
-  segment: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    alignItems: 'center',
-    borderRadius: radius.sm,
-  },
+  segmented: { flexDirection: 'row', backgroundColor: colors.border, borderRadius: radius.md, padding: 3 },
+  segment: { flex: 1, paddingVertical: spacing.sm, alignItems: 'center', borderRadius: radius.sm },
   segmentActive: {
     backgroundColor: colors.card,
     shadowColor: '#000',
@@ -139,27 +525,124 @@ const styles = StyleSheet.create({
   },
   segmentText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '600' },
   segmentTextActive: { color: colors.text },
-  list: { padding: spacing.lg, gap: spacing.sm },
-  nameCard: {
+  searchBarRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  searchBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: colors.card,
-    borderRadius: radius.md,
-    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+  },
+  searchIcon: { marginRight: spacing.sm },
+  searchInput: { flex: 1, height: 44, fontSize: fontSize.md, color: colors.text },
+  section: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 4,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  sectionHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  sectionTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.text },
+  countBadge: {
+    backgroundColor: colors.border,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  countBadgeText: { fontSize: fontSize.xs, fontWeight: '700', color: colors.textMuted },
+  sectionList: { paddingHorizontal: spacing.md, paddingBottom: spacing.md, gap: spacing.sm },
+  emptySection: { paddingHorizontal: spacing.md, paddingBottom: spacing.md, alignItems: 'center' },
+  nameCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  nameCardDragging: { borderColor: colors.primary, backgroundColor: colors.primaryLight, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.15, shadowRadius: 10, elevation: 8 },
+  matchCard: { borderWidth: 1.5, borderColor: colors.match + '60' },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   sexIcon: { fontSize: fontSize.sm, fontWeight: '700' },
   sexF: { color: colors.primary },
   sexM: { color: colors.secondary },
   nameText: { fontSize: fontSize.md, fontWeight: '600', color: colors.text },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
-  emptyEmoji: { fontSize: 56 },
-  emptyTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
-  emptyText: { fontSize: fontSize.md, color: colors.textMuted, textAlign: 'center' },
-  muted: { color: colors.textMuted },
+  matchEmoji: { fontSize: 18 },
+  waitingSection: { paddingHorizontal: spacing.md, paddingBottom: spacing.md, alignItems: 'center', gap: spacing.md },
+  waitingText: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center' },
+  codeBox: {
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  codeText: { fontSize: 32, fontWeight: '900', letterSpacing: 6, color: colors.primary, fontFamily: 'monospace' },
+  copyHint: { fontSize: fontSize.xs, color: colors.primary, opacity: 0.7 },
+  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, width: '100%' },
+  divider: { flex: 1, height: 1, backgroundColor: colors.border },
+  dividerText: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '600' },
+  joinCodeBtn: { paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
+  joinCodeBtnText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.primary },
+  muted: { color: colors.textMuted, fontSize: fontSize.sm },
+  devReset: { fontSize: fontSize.md, color: colors.textMuted },
+  // Modal
+  modalOverlay: { flex: 1, justifyContent: 'flex-end' },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
+  modalSheet: {
+    backgroundColor: colors.card,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.xl + spacing.lg,
+    paddingTop: spacing.md,
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  modalHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: spacing.sm },
+  modalTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
+  modalSubtitle: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center' },
+  codeInput: {
+    fontSize: 36,
+    fontWeight: '900',
+    letterSpacing: 10,
+    color: colors.text,
+    textAlign: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: colors.primary,
+    paddingBottom: spacing.sm,
+    minWidth: 220,
+    fontFamily: 'monospace',
+  },
+  errorText: { fontSize: fontSize.sm, color: colors.error },
+  joinBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    alignItems: 'center',
+    width: '100%',
+    marginTop: spacing.sm,
+  },
+  joinBtnDisabled: { opacity: 0.5 },
+  joinBtnText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
+  cancelBtn: { paddingVertical: spacing.sm },
+  cancelBtnText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '600' },
 });

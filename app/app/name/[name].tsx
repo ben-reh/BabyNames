@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActionSheetIOS, ActivityIndicator, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import { useAddName, useList, useRemoveName } from '../../src/api/lists';
 import { useName, useNamePopularity, useNameYearRank } from '../../src/api/names';
+import { useRecordSwipe } from '../../src/api/swipe';
 import { useSessionStore } from '../../src/store';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
+import { SSA_BIRTHS_BY_YEAR } from '../../src/constants/ssaBirths';
 
 const CHART_WIDTH = Dimensions.get('window').width - spacing.lg * 2;
 const GIRL_COLOR = colors.primary;       // pink
@@ -22,19 +25,51 @@ export default function NameDetail() {
   const { data: listData } = useList(listId);
   const addName = useAddName(listId!);
   const removeName = useRemoveName(listId!);
+  const { mutate: recordSwipe } = useRecordSwipe();
 
   const [showF, setShowF] = useState(true);
   const [showM, setShowM] = useState(true);
+  const [showGenderTooltip, setShowGenderTooltip] = useState(false);
 
   const myNames = partnerRole === 'A'
     ? listData?.partnerA?.names ?? []
     : listData?.partnerB?.names ?? [];
   const isInMyList = myNames.includes(nameParam);
 
+  const handleAdd = (sexContext: 'F' | 'M' | 'U') => {
+    if (!deviceId) return;
+    addName.mutate({ deviceId, name: nameParam });
+    recordSwipe({ deviceId, name: nameParam, liked: true, sex_context: sexContext });
+  };
+
   const handleToggle = () => {
     if (!deviceId) return;
-    if (isInMyList) removeName.mutate({ deviceId, name: nameParam });
-    else addName.mutate({ deviceId, name: nameParam });
+    if (isInMyList) {
+      removeName.mutate({ deviceId, name: nameParam });
+    } else {
+      handleAdd(nameData?.sex === 'M' ? 'M' : 'F');
+    }
+  };
+
+  const handleLongPress = () => {
+    if (!deviceId || !nameData) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        title: isInMyList ? `Move "${nameParam}" to` : `Add "${nameParam}" to`,
+        options: ['Cancel', '♀ Girl list', 'Unisex list', '♂ Boy list'],
+        cancelButtonIndex: 0,
+      },
+      (buttonIndex) => {
+        const ctx = ([null, 'F', 'U', 'M'] as const)[buttonIndex];
+        if (!ctx) return;
+        if (isInMyList) {
+          recordSwipe({ deviceId, name: nameParam, liked: true, sex_context: ctx });
+        } else {
+          handleAdd(ctx);
+        }
+      },
+    );
   };
 
   if (isLoading || !nameData) {
@@ -54,6 +89,12 @@ export default function NameDetail() {
   const hasFData = fByYear.size > 0;
   const hasMData = mByYear.size > 0;
 
+  // Compute female_pct from 2025 popularity data; fall back to DynamoDB value
+  const f2025 = fByYear.get(2025) ?? 0;
+  const m2025 = mByYear.get(2025) ?? 0;
+  const total2025 = f2025 + m2025;
+  const femalePct = total2025 > 0 ? f2025 / total2025 : (nameData.female_pct ?? null);
+
   // Sample ~20 points for smooth rendering
   const step = Math.max(1, Math.ceil(allYears.length / 20));
   const sampledYears = allYears.filter((_, i) => i % step === 0);
@@ -61,8 +102,12 @@ export default function NameDetail() {
     sampledYears.push(allYears[allYears.length - 1]);
   }
 
-  const fData = sampledYears.map((y) => fByYear.get(y) ?? 0);
-  const mData = sampledYears.map((y) => mByYear.get(y) ?? 0);
+  const toPct = (count: number, year: number) => {
+    const total = SSA_BIRTHS_BY_YEAR[year];
+    return total ? (count / total) * 100 : 0;
+  };
+  const fData = sampledYears.map((y) => toPct(fByYear.get(y) ?? 0, y));
+  const mData = sampledYears.map((y) => toPct(mByYear.get(y) ?? 0, y));
 
   // Only ~6 visible labels
   const labelStep = Math.max(1, Math.ceil(sampledYears.length / 6));
@@ -92,17 +137,6 @@ export default function NameDetail() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.name}>{nameData.name}</Text>
 
-        <View style={styles.badges}>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{nameData.sex === 'F' ? '♀ Girl' : '♂ Boy'}</Text>
-          </View>
-          {nameData.origin && (
-            <View style={[styles.badge, styles.originBadge]}>
-              <Text style={[styles.badgeText, styles.originBadgeText]}>{nameData.origin}</Text>
-            </View>
-          )}
-        </View>
-
         <View style={styles.statsRow}>
           {nameData.year_peak && (
             <View style={styles.stat}>
@@ -116,7 +150,35 @@ export default function NameDetail() {
               <Text style={styles.statLabel}>{yearRank.year} rank</Text>
             </View>
           )}
+          {nameData.origin && (
+            <View style={styles.stat}>
+              <Text style={styles.statValue}>{nameData.origin}</Text>
+              <Text style={styles.statLabel}>Origin</Text>
+            </View>
+          )}
         </View>
+
+        {femalePct != null && (
+          <TouchableOpacity
+            style={styles.genderBarSection}
+            onPress={() => setShowGenderTooltip((v) => !v)}
+            activeOpacity={0.8}
+          >
+            <View style={styles.genderBarRow}>
+              <Text style={styles.genderBarLabel}>♀ {Math.round(femalePct * 100)}%</Text>
+              <Text style={styles.genderBarLabel}>{Math.round((1 - femalePct) * 100)}% ♂</Text>
+            </View>
+            <View style={styles.genderBar}>
+              <View style={[styles.genderBarFemale, { flex: femalePct * 100 }]} />
+              <View style={[styles.genderBarMale, { flex: (1 - femalePct) * 100 }]} />
+            </View>
+            {showGenderTooltip && (
+              <View style={styles.tooltip}>
+                <Text style={styles.tooltipText}>Based on 2025 births</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        )}
 
         {showChart && (
           <View style={styles.chartSection}>
@@ -143,6 +205,7 @@ export default function NameDetail() {
               height={180}
               withDots={false}
               withInnerLines={false}
+              formatYLabel={(v) => `${parseFloat(v).toFixed(2)}%`}
               chartConfig={{
                 backgroundColor: colors.card,
                 backgroundGradientFrom: colors.card,
@@ -193,12 +256,17 @@ export default function NameDetail() {
         <TouchableOpacity
           style={[styles.toggleBtn, isInMyList && styles.toggleBtnActive]}
           onPress={handleToggle}
+          onLongPress={handleLongPress}
+          delayLongPress={400}
         >
           <Ionicons name={isInMyList ? 'heart' : 'heart-outline'} size={20} color={isInMyList ? '#fff' : colors.primary} />
           <Text style={[styles.toggleBtnText, isInMyList && styles.toggleBtnTextActive]}>
             {isInMyList ? 'In my list' : 'Add to my list'}
           </Text>
         </TouchableOpacity>
+        {!isInMyList && (
+          <Text style={styles.longPressHint}>Hold to choose which list</Text>
+        )}
       </View>
     </View>
   );
@@ -210,15 +278,25 @@ const styles = StyleSheet.create({
   headerBar: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg + spacing.md, paddingBottom: spacing.md, alignItems: 'flex-end' },
   content: { paddingHorizontal: spacing.lg, paddingBottom: 120 },
   name: { fontSize: fontSize.xxl, fontWeight: '900', color: colors.text, marginBottom: spacing.md },
-  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.lg },
-  badge: { backgroundColor: colors.border, borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
-  badgeText: { fontSize: fontSize.sm, color: colors.text, fontWeight: '600' },
-  originBadge: { backgroundColor: colors.primaryLight },
-  originBadgeText: { color: colors.primary },
-  statsRow: { flexDirection: 'row', gap: spacing.xl, marginBottom: spacing.lg },
+  statsRow: { flexDirection: 'row', gap: spacing.xl, marginBottom: spacing.lg, flexWrap: 'wrap' },
   stat: { alignItems: 'center' },
-  statValue: { fontSize: fontSize.xl, fontWeight: '800', color: colors.text },
+  statValue: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text, textAlign: 'center' },
   statLabel: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
+  genderBarSection: { marginBottom: spacing.lg },
+  genderBarRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.xs },
+  genderBarLabel: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '600' },
+  genderBar: { flexDirection: 'row', height: 8, borderRadius: radius.full, overflow: 'hidden' },
+  genderBarFemale: { backgroundColor: colors.primary },
+  genderBarMale: { backgroundColor: colors.secondary },
+  tooltip: {
+    alignSelf: 'center',
+    marginTop: spacing.sm,
+    backgroundColor: colors.text,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  tooltipText: { fontSize: fontSize.xs, color: '#fff', fontWeight: '600' },
   chartSection: { marginBottom: spacing.xl },
   chartHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
   legend: { flexDirection: 'row', gap: spacing.md },
@@ -233,7 +311,8 @@ const styles = StyleSheet.create({
   chip: { backgroundColor: colors.primaryLight, borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
   variantChip: { backgroundColor: colors.border },
   chipText: { fontSize: fontSize.sm, color: colors.text, fontWeight: '600' },
-  bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border, padding: spacing.lg, paddingBottom: spacing.xl },
+  bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border, padding: spacing.lg, paddingBottom: spacing.xl, gap: spacing.xs },
+  longPressHint: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: 'center' },
   toggleBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, borderRadius: radius.lg, padding: spacing.md, borderWidth: 2, borderColor: colors.primary },
   toggleBtnActive: { backgroundColor: colors.primary },
   toggleBtnText: { fontSize: fontSize.md, fontWeight: '700', color: colors.primary },

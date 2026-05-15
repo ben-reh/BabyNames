@@ -65,11 +65,11 @@ export function useNamesBatch(names: string[]) {
   return useQuery({
     queryKey: ['names', 'batch', names.slice().sort().join(',')],
     queryFn: async () => {
-      const { data } = await api.get<{ names: Array<{ name: string; sex: string }> }>(
+      const { data } = await api.get<{ names: Array<{ name: string; sex: string; female_pct: number | null }> }>(
         '/names/batch',
         { params: { names: names.join(',') } },
       );
-      return new Map(data.names.map((n) => [n.name, n.sex as 'M' | 'F']));
+      return new Map(data.names.map((n) => [n.name, { sex: n.sex as 'M' | 'F', female_pct: n.female_pct }]));
     },
     enabled: names.length > 0,
     staleTime: 10 * 60 * 1000,

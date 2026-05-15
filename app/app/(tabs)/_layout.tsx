@@ -58,15 +58,8 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="my-list"
           options={{
-            title: 'My List',
+            title: 'My Lists',
             tabBarIcon: ({ color, size }) => <Ionicons name="bookmark" size={size} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="matches"
-          options={{
-            title: 'Matches',
-            tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" size={size} color={color} />,
           }}
         />
         <Tabs.Screen

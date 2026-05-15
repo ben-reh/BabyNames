@@ -7,17 +7,25 @@
 ## App Features
 
 ### Onboarding flow
-- [ ] Partner pairing / invite flow
-- [ ] Initial preference setup (sex filter, origin preferences)
-- [ ] Name style quiz to seed initial taste vector
+- [x] Partner pairing / invite flow (create list + share code, or join with code)
+- [x] Initial preference setup (sex filter — girl / boy / both)
+- [x] Name style quiz to seed initial taste vector (5 forced-choice pairs across 10 style clusters)
+- [x] Favorite names import (search, paste from Notes/clipboard, or free-text entry)
+- [x] How it works explainer
+- [ ] Popularity preferences in onboarding
+- [ ] Name style quiz improvements (more pairs, better cluster coverage)
 
 ### Swipe card improvements
-- [ ] 2025 SSA rank
-- [ ] Origin / meaning
-- [ ] Popularity trend (rising / falling / stable)
+- [x] 2025 SSA rank
+- [x] Origin / meaning (origin shown; meaning not in data model)
 - [ ] Famous namesakes
 - [ ] Sibling name compatibility indicator
 - [ ] Name gender split for 2025 
+
+### Name tags
+- [ ] User-defined tags on liked names (e.g. "top pick", "maybe", "love the sound", "too popular")
+- [ ] Filter and sort My Lists by tag
+- [ ] Partner can see each other's tags to understand why a name was liked
 
 ### AI chat feature
 - [ ] Natural language name exploration ("find me something like Clementine but shorter")
@@ -41,8 +49,8 @@
 
 ### Medium priority
 - [ ] **Trend velocity feature** — add 3–5 year popularity slope from RDS `name_popularity` data; distinguishes "peaked 2020, now declining" from "peaked 2020, still rising"
-- [ ] **Dynamic minimum count floor** — lower 200-birth floor for users who revealed rarity preference (currently filters good names: Melrose, Dawn, Rue, Ellsworth)
-- [ ] **Skip signal** — capture quick-swipe-past as implicit dislike; improve taste vector quality
+- [x] **Long-tail exploration** — rare names (Melrose, Dawn, Rue) have vectors but never surface because a generic taste vector points toward popular names in ANN search; add a diversity/exploration component that injects long-tail names weighted by origin/style fit, independent of similarity score
+- [x] **Skip signal** — capture quick-swipe-past as implicit dislike; improve taste vector quality
 
 ### Lower priority
 - [ ] **Sibling name compatibility** — factor in existing children's names for families on their second+ child
@@ -52,6 +60,6 @@
 ---
 
 ## Infrastructure
-- [ ] Deploy recommendations and swipe Lambda functions (handlers written, not yet wired to API Gateway)
+- [x] Deploy recommendations and swipe Lambda functions (handlers written, not yet wired to API Gateway)
 - [ ] Cognito auth integration (guest browsing works; account required for swipes/lists)
 - [ ] App Store submission

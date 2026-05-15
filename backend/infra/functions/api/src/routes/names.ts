@@ -7,7 +7,7 @@ const LISTS_TABLE = 'Lists';
 
 type Params = Record<string, string | undefined>;
 
-function formatName(item: Record<string, unknown>) {
+export function formatName(item: Record<string, unknown>) {
   return {
     name: item.name,
     sex: item.sex,
@@ -15,6 +15,7 @@ function formatName(item: Record<string, unknown>) {
     origin: item.origin || null,
     year_peak: item.year_peak ? Number(item.year_peak) : null,
     total_count: item.total_count ? Number(item.total_count) : null,
+    female_pct: item.female_pct ? Number(item.female_pct) : null,
     similar_names: (item.similar_names as string[]) || [],
     spelling_variants: item.spelling_variants
       ? (item.spelling_variants as string).split(' ').filter(Boolean)
@@ -41,7 +42,9 @@ async function getExcludedNames(topN: number, yearsBack: number, sex?: string): 
 }
 
 export async function getNames(params: Params) {
-  const { sex, origin, listId, deviceId, exclude_top, years_back, min_rank, max_rank, cursor } = params;
+  // 'U' (unisex) means no DynamoDB sex filter — female_pct filtering handled by recommendations engine
+  const sex = params.sex === 'U' ? undefined : params.sex;
+  const { origin, listId, deviceId, exclude_top, years_back, min_rank, max_rank, cursor } = params;
   const limit = Math.min(parseInt(params.limit || '20', 10), 100);
 
   let excluded: Set<string> | null = null;
@@ -142,14 +145,19 @@ export async function getNames(params: Params) {
 
     if (sex) { filterParts.push('sex = :sex'); attrVals[':sex'] = sex; }
     if (min_rank) { filterParts.push('#rnk >= :min_rank'); attrNames['#rnk'] = 'rank'; attrVals[':min_rank'] = Number(min_rank); }
-    if (max_rank) { filterParts.push('#rnk <= :max_rank'); attrNames['#rnk'] = 'rank'; attrVals[':max_rank'] = Number(max_rank); }
+    // Apply cold-start cap: no personalization signal → restrict scan to top-ranked names
+    // so sorting by rank produces genuinely popular results, not a random scan subset.
+    const effectiveMaxRank = max_rank ?? (similarityScores.size === 0 && partnerSet.size === 0 ? '300' : undefined);
+    if (effectiveMaxRank) { filterParts.push('#rnk <= :max_rank'); attrNames['#rnk'] = 'rank'; attrVals[':max_rank'] = Number(effectiveMaxRank); }
 
     const result = await ddb.send(new ScanCommand({
       TableName: TABLE,
       FilterExpression: filterParts.length ? filterParts.join(' AND ') : undefined,
       ExpressionAttributeNames: Object.keys(attrNames).length ? attrNames : undefined,
       ExpressionAttributeValues: Object.keys(attrVals).length ? attrVals : undefined,
-      Limit: limit * 8,
+      // Cold-start cap bounds results to ~300 names — skip Limit so the full table
+      // is scanned and all matching top-ranked names are found regardless of sex filter.
+      Limit: effectiveMaxRank ? undefined : limit * 8,
       ExclusiveStartKey: lastKey,
     }));
     items = (result.Items ?? []) as Record<string, unknown>[];
@@ -157,6 +165,30 @@ export async function getNames(params: Params) {
   }
 
   if (excluded) items = items.filter(i => !excluded!.has(i.name as string));
+
+  // Batch-fetch 2025 SSA ranks before sorting so cold start can order by them
+  const rank2025Map = new Map<string, number>();
+  const femalePctMap = new Map<string, number>();
+  if (items.length > 0) {
+    const nameList = items.map((i) => i.name as string);
+    const { rows } = await getPool().query<{ name: string; gender: string; rank_2025: number; female_pct: number }>(
+      `SELECT name, gender, rank_2025,
+              female_count::float / NULLIF(total_count, 0) AS female_pct
+       FROM (
+         SELECT name, gender,
+                RANK() OVER (PARTITION BY gender ORDER BY count DESC) AS rank_2025,
+                SUM(count) OVER (PARTITION BY name) AS total_count,
+                SUM(CASE WHEN gender = 'F' THEN count ELSE 0 END) OVER (PARTITION BY name) AS female_count
+         FROM name_popularity WHERE year = 2025
+       ) all_ranked
+       WHERE name = ANY($1::text[])`,
+      [nameList],
+    );
+    for (const row of rows) {
+      rank2025Map.set(`${row.name}-${row.gender}`, Number(row.rank_2025));
+      femalePctMap.set(row.name, Number(row.female_pct));
+    }
+  }
 
   // Score and sort: partner-liked first, then similarity-boosted, then popularity + jitter
   if (partnerSet.size > 0 || similarityScores.size > 0) {
@@ -167,7 +199,7 @@ export async function getNames(params: Params) {
         score = 10000;
       } else {
         const simScore = (similarityScores.get(name) ?? 0) * 15;
-        const rank = Number(item.rank ?? 99999);
+        const rank = rank2025Map.get(`${item.name as string}-${item.sex as string}`) ?? Number(item.rank ?? 99999);
         const popScore = 100 / Math.sqrt(rank);
         score = simScore + popScore + Math.random() * 3;
       }
@@ -175,12 +207,26 @@ export async function getNames(params: Params) {
     });
     scored.sort((a, b) => b.score - a.score);
     items = scored.map((s) => s.item);
+  } else {
+    // Cold start: sort by 2025 rank with small jitter to avoid identical ordering every session
+    items.sort((a, b) => {
+      const ra = rank2025Map.get(`${a.name as string}-${a.sex as string}`) ?? Number(a.rank ?? 99999);
+      const rb = rank2025Map.get(`${b.name as string}-${b.sex as string}`) ?? Number(b.rank ?? 99999);
+      return (ra + Math.random() * 5) - (rb + Math.random() * 5);
+    });
   }
 
   items = items.slice(0, limit);
 
   return ok({
-    names: items.map(formatName),
+    names: items.map((item) => {
+      const formatted = formatName(item);
+      return {
+        ...formatted,
+        female_pct: femalePctMap.has(item.name as string) ? femalePctMap.get(item.name as string)! : formatted.female_pct,
+        rank_2025: rank2025Map.get(`${item.name as string}-${item.sex as string}`) ?? null,
+      };
+    }),
     cursor: nextKey ? Buffer.from(JSON.stringify(nextKey)).toString('base64url') : null,
   });
 }
@@ -194,14 +240,14 @@ export async function getBatchNames(params: Params) {
     RequestItems: {
       [TABLE]: {
         Keys: keys,
-        ProjectionExpression: '#n, sex',
+        ProjectionExpression: '#n, sex, female_pct',
         ExpressionAttributeNames: { '#n': 'name' },
       },
     },
   }));
 
-  const items = (result.Responses?.[TABLE] ?? []) as Array<{ name: string; sex: string }>;
-  return ok({ names: items.map((i) => ({ name: i.name, sex: i.sex })) });
+  const items = (result.Responses?.[TABLE] ?? []) as Array<{ name: string; sex: string; female_pct?: number }>;
+  return ok({ names: items.map((i) => ({ name: i.name, sex: i.sex, female_pct: i.female_pct ? Number(i.female_pct) : null })) });
 }
 
 export async function getRankings(params: Params) {

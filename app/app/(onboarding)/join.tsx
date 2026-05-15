@@ -21,7 +21,7 @@ export default function Join() {
       {
         onSuccess: (data) => {
           setSession({ listId: data.listId, deviceId, partnerRole: data.role, code: code.toUpperCase() });
-          router.replace('/(tabs)/swipe');
+          router.replace('/(onboarding)/name-favorites');
         },
       },
     );

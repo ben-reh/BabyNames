@@ -31,8 +31,8 @@ export default function Welcome() {
       </View>
 
       <View style={styles.buttons}>
-        <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/(onboarding)/create')}>
-          <Text style={styles.primaryBtnText}>Start a new list</Text>
+        <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/(onboarding)/sex-filter')}>
+          <Text style={styles.primaryBtnText}>Get started →</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.push('/(onboarding)/join')}>

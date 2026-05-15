@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  ActionSheetIOS,
   ActivityIndicator,
   FlatList,
   StyleSheet,
@@ -12,13 +14,15 @@ import {
 } from 'react-native';
 import { useAddName, useList, useRemoveName } from '../../src/api/lists';
 import { useNameSearch } from '../../src/api/names';
+import { useRecordSwipe } from '../../src/api/swipe';
 import type { Name } from '../../src/api/types';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
-import { useSessionStore } from '../../src/store';
+import { useSessionStore, useFilterStore } from '../../src/store';
 
 export default function SearchScreen() {
   const router = useRouter();
   const { listId, deviceId, partnerRole } = useSessionStore();
+  const filters = useFilterStore();
   const [q, setQ] = useState('');
   const inputRef = useRef<TextInput>(null);
 
@@ -30,6 +34,7 @@ export default function SearchScreen() {
 
   const addName = useAddName(listId!);
   const removeName = useRemoveName(listId!);
+  const { mutate: recordSwipe } = useRecordSwipe();
 
   const { data: results, isLoading } = useNameSearch(q);
 
@@ -57,10 +62,32 @@ export default function SearchScreen() {
         </View>
         <TouchableOpacity
           hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+          delayLongPress={400}
           onPress={() => {
             if (!deviceId) return;
-            if (isLiked) removeName.mutate({ deviceId, name: item.name });
-            else addName.mutate({ deviceId, name: item.name });
+            if (isLiked) {
+              removeName.mutate({ deviceId, name: item.name });
+            } else {
+              addName.mutate({ deviceId, name: item.name });
+              recordSwipe({ deviceId, name: item.name, liked: true, sex_context: filters.sex });
+            }
+          }}
+          onLongPress={() => {
+            if (!deviceId || isLiked) return;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            ActionSheetIOS.showActionSheetWithOptions(
+              {
+                title: `Add "${item.name}" to`,
+                options: ['Cancel', '♀ Girl list', 'Unisex list', '♂ Boy list'],
+                cancelButtonIndex: 0,
+              },
+              (buttonIndex) => {
+                const ctx = ([null, 'F', 'U', 'M'] as const)[buttonIndex];
+                if (!ctx) return;
+                addName.mutate({ deviceId, name: item.name });
+                recordSwipe({ deviceId, name: item.name, liked: true, sex_context: ctx });
+              },
+            );
           }}
         >
           <Ionicons
@@ -81,6 +108,20 @@ export default function SearchScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Search</Text>
+      </View>
+
+      <View style={styles.segmentedRow}>
+        <View style={styles.segmented}>
+          {([['F', '♀ Girl'], ['U', 'Unisex'], ['M', '♂ Boy']] as ['F' | 'U' | 'M', string][]).map(([val, label]) => (
+            <TouchableOpacity
+              key={val}
+              style={[styles.segment, filters.sex === val && styles.segmentActive]}
+              onPress={() => filters.setSex(val)}
+            >
+              <Text style={[styles.segmentText, filters.sex === val && styles.segmentTextActive]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
       <View style={styles.searchBarRow}>
@@ -144,6 +185,19 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
   },
   headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
+  segmentedRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  segmented: { flexDirection: 'row', backgroundColor: colors.border, borderRadius: radius.md, padding: 3 },
+  segment: { flex: 1, paddingVertical: spacing.sm, alignItems: 'center', borderRadius: radius.sm },
+  segmentActive: {
+    backgroundColor: colors.card,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  segmentText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '600' },
+  segmentTextActive: { color: colors.text },
   searchBarRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   searchBar: {
     flexDirection: 'row',
