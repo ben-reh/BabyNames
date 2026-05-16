@@ -143,6 +143,35 @@ export class BabyNamesStack extends cdk.Stack {
       resources: [listsTable.tableArn, `${listsTable.tableArn}/index/*`],
     }));
 
+    // --- Lambda: AI chat handler (outside VPC — needs internet for Bedrock) ---
+    const aiFunction = new NodejsFunction(this, 'AiFunction', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, '../functions/api/src/handler-ai.ts'),
+      handler: 'handler',
+      projectRoot: path.join(__dirname, '..'),
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 256,
+      environment: {
+        NAMES_TABLE: namesTable.tableName,
+        LISTS_TABLE: listsTable.tableName,
+        BEDROCK_REGION: this.region,
+      },
+      bundling: { externalModules: [] },
+    });
+
+    aiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:Scan', 'dynamodb:BatchGetItem'],
+      resources: [namesTable.tableArn, `${namesTable.tableArn}/index/*`],
+    }));
+    aiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'],
+      resources: [listsTable.tableArn],
+    }));
+    aiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel'],
+      resources: [`arn:aws:bedrock:${this.region}::foundation-model/amazon.nova-lite-v1:0`],
+    }));
+
     // --- API Gateway ---
     const api = new apigateway.RestApi(this, 'BabyNamesApi', {
       restApiName: 'BabyNamesApi',
@@ -170,6 +199,10 @@ export class BabyNamesStack extends cdk.Stack {
     api.root.addResource('swipe').addMethod('POST', integration);
     api.root.addResource('swipes').addMethod('GET', integration);
 
+
+    // /ai routes
+    const aiIntegration = new apigateway.LambdaIntegration(aiFunction);
+    api.root.addResource('ai').addResource('chat').addMethod('POST', aiIntegration);
 
     // /lists routes
     const lists = api.root.addResource('lists');

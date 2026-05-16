@@ -69,6 +69,13 @@ export default function TabsLayout() {
             tabBarIcon: ({ color, size }) => <Ionicons name="trophy" size={size} color={color} />,
           }}
         />
+        <Tabs.Screen
+          name="chat"
+          options={{
+            title: 'Ask AI',
+            tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" size={size} color={color} />,
+          }}
+        />
       </Tabs>
       <MatchBanner />
     </View>
