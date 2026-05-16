@@ -42,7 +42,9 @@ async function toolGetNameInfo(input: { name: string }): Promise<unknown> {
     new GetCommand({ TableName: NAMES_TABLE, Key: { name: capitalize(input.name) } }),
   );
   if (!result.Item) return { error: `Name '${input.name}' not found in database.` };
-  return toNameResult(result.Item as Record<string, unknown>);
+  const r = toNameResult(result.Item as Record<string, unknown>);
+  // Cap similar_names so the model doesn't dump a 20-name list into its prose
+  return { ...r, similar_names: r.similar_names.slice(0, 5) };
 }
 
 async function toolSearchNames(input: {
@@ -52,6 +54,7 @@ async function toolSearchNames(input: {
   max_rank?: number;
   prefix?: string;
   similar_to?: string;
+  max_name_length?: number;
   limit?: number;
 }): Promise<unknown> {
   const limit = Math.min(input.limit ?? 20, 50);
@@ -85,21 +88,37 @@ async function toolSearchNames(input: {
 
     for (const origin of input.origins.slice(0, 5)) {
       const filterParts: string[] = [];
+      const keyCondParts = ['origin = :origin'];
       const attrNames: Record<string, string> = {};
       const attrVals: Record<string, unknown> = { ':origin': origin };
 
+      // rank is the GSI sort key — must go in KeyConditionExpression, not FilterExpression
+      if (input.min_rank && input.max_rank) {
+        attrNames['#rnk'] = 'rank';
+        keyCondParts.push('#rnk BETWEEN :min_rank AND :max_rank');
+        attrVals[':min_rank'] = input.min_rank;
+        attrVals[':max_rank'] = input.max_rank;
+      } else if (input.min_rank) {
+        attrNames['#rnk'] = 'rank';
+        keyCondParts.push('#rnk >= :min_rank');
+        attrVals[':min_rank'] = input.min_rank;
+      } else if (input.max_rank) {
+        attrNames['#rnk'] = 'rank';
+        keyCondParts.push('#rnk <= :max_rank');
+        attrVals[':max_rank'] = input.max_rank;
+      }
+
       if (input.sex && input.sex !== 'U') { filterParts.push('sex = :sex'); attrVals[':sex'] = input.sex; }
-      if (input.min_rank) { filterParts.push('#rnk >= :min_rank'); attrNames['#rnk'] = 'rank'; attrVals[':min_rank'] = input.min_rank; }
-      if (input.max_rank) { filterParts.push('#rnk <= :max_rank'); attrNames['#rnk'] = 'rank'; attrVals[':max_rank'] = input.max_rank; }
       if (input.prefix) { filterParts.push('begins_with(#n, :prefix)'); attrNames['#n'] = 'name'; attrVals[':prefix'] = capitalize(input.prefix); }
+      if (input.max_name_length) { filterParts.push('size(#n) <= :max_len'); attrNames['#n'] = 'name'; attrVals[':max_len'] = input.max_name_length; }
 
       const result = await ddb.send(
         new QueryCommand({
           TableName: NAMES_TABLE,
           IndexName: ORIGIN_INDEX,
-          KeyConditionExpression: 'origin = :origin',
+          KeyConditionExpression: keyCondParts.join(' AND '),
           FilterExpression: filterParts.length ? filterParts.join(' AND ') : undefined,
-          ExpressionAttributeNames: Object.keys(attrNames).length ? attrNames : undefined,
+          ExpressionAttributeNames: attrNames,
           ExpressionAttributeValues: attrVals,
           Limit: limit * 3,
         }),
@@ -125,6 +144,7 @@ async function toolSearchNames(input: {
   if (input.min_rank) { filterParts.push('#rnk >= :min_rank'); attrNames['#rnk'] = 'rank'; attrVals[':min_rank'] = input.min_rank; }
   if (input.max_rank) { filterParts.push('#rnk <= :max_rank'); attrNames['#rnk'] = 'rank'; attrVals[':max_rank'] = input.max_rank; }
   if (input.prefix) { filterParts.push('begins_with(#n, :prefix)'); attrNames['#n'] = 'name'; attrVals[':prefix'] = capitalize(input.prefix); }
+  if (input.max_name_length) { filterParts.push('size(#n) <= :max_len'); attrNames['#n'] = 'name'; attrVals[':max_len'] = input.max_name_length; }
 
   const result = await ddb.send(
     new ScanCommand({
@@ -220,6 +240,7 @@ const TOOLS = [
             max_rank: { type: 'number', description: 'Max SSA rank. For rarer names use 3000+.' },
             prefix: { type: 'string', description: 'Name prefix, e.g. "El" matches Eleanor, Eliza' },
             similar_to: { type: 'string', description: 'Return precomputed similar names for this name' },
+            max_name_length: { type: 'number', description: 'Max character length of name. Use 4 for one-syllable, 7 for two-syllable.' },
             limit: { type: 'number', description: 'Max results (default 20, max 50)' },
           },
         },
@@ -243,21 +264,31 @@ const TOOLS = [
   },
 ];
 
-function buildSystemPrompt(sex: string | null): string {
+function buildSystemPrompt(sex: string | null, listId: string | null | undefined): string {
   const sexContext = sex === 'F' ? 'girl names' : sex === 'M' ? 'boy names' : 'names of any gender';
+  const listContext = listId
+    ? ''
+    : '\nThe user has not set up a partner list yet, so get_liked_names will not work. If asked about their list, tell them they can save names by swiping or searching, then come back to ask for personalized suggestions.';
   const today = new Date().toISOString().split('T')[0];
-  return `You are an expert baby name advisor helping parents explore and choose names. You have access to a US baby name database with SSA popularity rankings (1=most popular), cultural origins, and precomputed similar-name relationships.
+  return `${listContext}You are an expert baby name advisor helping parents explore and choose names. You have access to a US baby name database with SSA popularity rankings (1=most popular), cultural origins, and precomputed similar-name relationships.
+
+IMPORTANT FORMATTING RULES:
+- Do NOT use XML tags like <response>, <answer>, <thinking>, or any other tags in your responses
+- Write plain, conversational prose only
+- Be concise — parents are reading on a phone
 
 Use your tools proactively:
-- When asked about a specific name, call get_name_info
-- When asked for names matching a style or description, call search_names with appropriate filters. Map style descriptions to origins: e.g. "Southern" → English/Biblical, "classic" → Latin/Greek/English, "nature" → English with high max_rank
-- When the user wants personalized suggestions, call get_liked_names first to understand their taste, then search for names with similar origins/style
-- You can call multiple tools in one turn
+- For a specific name → call get_name_info
+- For style/vibe requests → call search_names. Style mappings: "Southern" → origins=["English","Hebrew"] max_rank=2000, "classic/vintage" → origins=["Latin","Greek","English"] max_rank=1000, "nature" → origins=["English"] max_rank=5000, "biblical" → origins=["Hebrew"] max_rank=3000
+- For one-syllable names → use max_name_length=4 (most one-syllable names are 3-4 chars: Rex, Hank, Jack, Lee, Cole)
+- For personalized suggestions → call get_liked_names first if listId is available
+- Try multiple search_names calls with different parameters if the first returns few results
 
-When surfacing names: mention them naturally in your prose and they will automatically appear as tappable cards in the UI. For list generation requests, aim for 10–20 names.
-Be concise — parents are reading on a phone. If a name isn't in the database, say so rather than inventing data.
+When you find names, they appear as tappable cards in the UI automatically — do not list them again in your prose. Write a 1–2 sentence intro only, then let the cards do the work.
+Keep all replies concise — parents are reading on a phone.
+If a name isn't in the database, say so rather than inventing data.
 
-The user's current sex filter is ${sexContext}. Apply as default unless they ask otherwise.
+The user's current sex filter is ${sexContext}. Apply as default.
 Today: ${today}. Most recent SSA data: 2025.`;
 }
 
@@ -292,11 +323,11 @@ export async function chatHandler(body: ChatRequest) {
     const response = await bedrock.send(
       new ConverseCommand({
         modelId: MODEL_ID,
-        system: [{ text: buildSystemPrompt(context?.sex ?? null) }],
+        system: [{ text: buildSystemPrompt(context?.sex ?? null, context?.listId) }],
         messages: bedrockMessages,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         toolConfig: { tools: TOOLS as any },
-        inferenceConfig: { maxTokens: 1024 },
+        inferenceConfig: { maxTokens: 512 },
       }),
     );
 
@@ -306,7 +337,27 @@ export async function chatHandler(body: ChatRequest) {
     if (response.stopReason === 'end_turn' || response.stopReason === 'max_tokens') {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const textBlock = (message.content ?? []).find((b: any) => 'text' in b) as any;
-      return ok({ reply: textBlock?.text ?? '', names: allNameResults });
+      const raw: string = textBlock?.text ?? '';
+      // Nova Lite sometimes wraps output in XML tags — strip/unwrap them
+      const cleaned = raw
+        .replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, '')
+        .replace(/^<response>\n?([\s\S]*?)\n?<\/response>$/s, '$1')
+        .replace(/^<answer>\n?([\s\S]*?)\n?<\/answer>$/s, '$1')
+        .trim();
+
+      // For lists (>1 name card), trim prose to intro line only — cards show the names
+      // For single-name lookups, the full description is valuable
+      const reply = allNameResults.length > 1
+        ? (() => {
+            const nlIdx = cleaned.indexOf('\n');
+            const sentMatch = cleaned.match(/^.+?[.!?:](?=\s|$)/s);
+            const sentEnd = sentMatch ? sentMatch[0].length : Infinity;
+            const cut = nlIdx > 0 ? Math.min(nlIdx, sentEnd) : sentEnd;
+            return cut < Infinity ? cleaned.slice(0, cut).trim() : cleaned;
+          })()
+        : cleaned;
+
+      return ok({ reply, names: allNameResults });
     }
 
     if (response.stopReason === 'tool_use') {

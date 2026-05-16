@@ -18,29 +18,33 @@ import { type ChatMessage, type NameResult, useChat } from '../../src/api/ai';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 import { useFilterStore, useSessionStore } from '../../src/store';
 
-type UserMessage = { id: string; type: 'user'; content: string };
+type UserMessage    = { id: string; type: 'user'; content: string };
 type AssistantMessage = { id: string; type: 'assistant'; content: string; names: NameResult[] };
 type LoadingMessage = { id: string; type: 'loading' };
 type MessageItem = UserMessage | AssistantMessage | LoadingMessage;
 
 const SUGGESTIONS = [
-  'Find me something like Clementine but shorter',
-  'Southern, vintage, one-syllable boy names',
-  'Tell me about the name Aurora',
-  'Help us decide between Liam and Oliver',
+  { icon: 'sparkles-outline' as const,     text: 'Tell me about the name Aurora' },
+  { icon: 'leaf-outline' as const,          text: 'Southern, vintage boy names' },
+  { icon: 'heart-outline' as const,         text: 'Find names like Clementine but shorter' },
+  { icon: 'people-outline' as const,        text: 'What do we already have on our list?' },
 ];
 
 function DotsIndicator() {
-  const dots = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
+  const dots = [
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+  ];
 
   useEffect(() => {
     const anims = dots.map((dot, i) =>
       Animated.loop(
         Animated.sequence([
-          Animated.delay(i * 160),
-          Animated.timing(dot, { toValue: 1, duration: 300, useNativeDriver: true }),
-          Animated.timing(dot, { toValue: 0, duration: 300, useNativeDriver: true }),
-          Animated.delay((dots.length - i - 1) * 160),
+          Animated.delay(i * 180),
+          Animated.timing(dot, { toValue: 1, duration: 280, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0, duration: 280, useNativeDriver: true }),
+          Animated.delay((dots.length - i - 1) * 180),
         ]),
       ),
     );
@@ -53,7 +57,13 @@ function DotsIndicator() {
       {dots.map((dot, i) => (
         <Animated.View
           key={i}
-          style={[styles.dot, { opacity: dot, transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }] }]}
+          style={[
+            styles.dot,
+            {
+              opacity: dot.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }),
+              transform: [{ scale: dot.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1.1] }) }],
+            },
+          ]}
         />
       ))}
     </View>
@@ -72,21 +82,33 @@ function NameCard({
   onPress: () => void;
 }) {
   return (
-    <TouchableOpacity style={styles.nameCard} onPress={onPress} activeOpacity={0.75}>
-      <Text style={[styles.nameCardSex, nameResult.sex === 'F' ? styles.sexF : styles.sexM]}>
-        {nameResult.sex === 'F' ? '♀' : '♂'}
-      </Text>
-      <Text style={styles.nameCardName}>{nameResult.name}</Text>
-      {nameResult.rank && <Text style={styles.nameCardRank}>#{nameResult.rank}</Text>}
-      {nameResult.origin && <Text style={styles.nameCardOrigin} numberOfLines={1}>{nameResult.origin}</Text>}
+    <TouchableOpacity style={styles.nameCard} onPress={onPress} activeOpacity={0.7}>
+      <View style={styles.nameCardTop}>
+        <Text style={[styles.nameCardSex, nameResult.sex === 'F' ? styles.sexF : styles.sexM]}>
+          {nameResult.sex === 'F' ? '♀' : '♂'}
+        </Text>
+        {nameResult.rank && (
+          <Text style={styles.nameCardRank}>#{nameResult.rank}</Text>
+        )}
+      </View>
+      <Text style={styles.nameCardName} numberOfLines={1}>{nameResult.name}</Text>
+      {nameResult.origin && (
+        <Text style={styles.nameCardOrigin} numberOfLines={1}>{nameResult.origin}</Text>
+      )}
       <TouchableOpacity
         style={[styles.addBtn, isAdded && styles.addBtnAdded]}
         onPress={onAdd}
         disabled={isAdded}
-        hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+        hitSlop={{ top: 6, right: 6, bottom: 6, left: 6 }}
       >
-        <Ionicons name={isAdded ? 'checkmark' : 'add'} size={14} color={isAdded ? colors.success : colors.primary} />
-        <Text style={[styles.addBtnText, isAdded && styles.addBtnTextAdded]}>{isAdded ? 'Added' : 'Add'}</Text>
+        <Ionicons
+          name={isAdded ? 'checkmark' : 'add'}
+          size={12}
+          color={isAdded ? colors.success : colors.primary}
+        />
+        <Text style={[styles.addBtnText, isAdded && styles.addBtnTextAdded]}>
+          {isAdded ? 'Added' : 'Add'}
+        </Text>
       </TouchableOpacity>
     </TouchableOpacity>
   );
@@ -108,37 +130,68 @@ function AssistantBubble({
   const unadded = message.names.filter((n) => !myNames.has(n.name));
   return (
     <View style={styles.assistantRow}>
+      {/* Text bubble — never contains name cards */}
       <View style={styles.assistantBubble}>
         <Text style={styles.bubbleText}>{message.content}</Text>
-        {message.names.length > 0 && (
-          <View style={styles.nameCardsSection}>
-            {message.names.length > 5 && unadded.length > 0 && (
-              <TouchableOpacity style={styles.addAllBtn} onPress={() => onAddAll(unadded)}>
-                <Ionicons name="add-circle-outline" size={15} color={colors.primary} />
-                <Text style={styles.addAllText}>Add all ({unadded.length})</Text>
-              </TouchableOpacity>
-            )}
-            <FlatList
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              data={message.names}
-              keyExtractor={(item) => item.name}
-              contentContainerStyle={styles.nameCardsList}
-              renderItem={({ item }) => (
-                <NameCard
-                  nameResult={item}
-                  isAdded={myNames.has(item.name)}
-                  onAdd={() => onAdd(item.name)}
-                  onPress={() => onNamePress(item.name)}
-                />
-              )}
-            />
-          </View>
-        )}
       </View>
+
+      {/* Name cards live OUTSIDE the bubble so it never inflates */}
+      {message.names.length > 0 && (
+        <View style={styles.nameCardsSection}>
+          {message.names.length > 4 && unadded.length > 0 && (
+            <TouchableOpacity style={styles.addAllBtn} onPress={() => onAddAll(unadded)}>
+              <Ionicons name="add-circle-outline" size={14} color={colors.primary} />
+              <Text style={styles.addAllText}>Add all {unadded.length} names</Text>
+            </TouchableOpacity>
+          )}
+          <FlatList
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            data={message.names}
+            keyExtractor={(item) => item.name}
+            contentContainerStyle={styles.nameCardsList}
+            renderItem={({ item }) => (
+              <NameCard
+                nameResult={item}
+                isAdded={myNames.has(item.name)}
+                onAdd={() => onAdd(item.name)}
+                onPress={() => onNamePress(item.name)}
+              />
+            )}
+          />
+        </View>
+      )}
     </View>
   );
 }
+
+const TEST_MESSAGES: MessageItem[] = [
+  { id: '1', type: 'user', content: 'Tell me about the name Aurora' },
+  {
+    id: '2', type: 'assistant',
+    content: "Aurora is a beautiful girl's name of Latin origin, meaning \"dawn.\" It ranked 704th in 2024, and similar names include Georgia, Marcella, and Norma.",
+    names: [{ name: 'Aurora', sex: 'F', rank: 704, origin: 'Latin', year_peak: 2024, similar_names: [] }],
+  },
+  { id: '3', type: 'user', content: 'Southern, vintage one-syllable boy names' },
+  {
+    id: '4', type: 'assistant',
+    content: 'Here are some Southern vintage one-syllable boy names:',
+    names: [
+      { name: 'Joel', sex: 'M', rank: 248, origin: 'Hebrew', year_peak: 1977, similar_names: [] },
+      { name: 'Jude', sex: 'M', rank: 182, origin: 'Hebrew', year_peak: 2022, similar_names: [] },
+      { name: 'Levi', sex: 'M', rank: 29, origin: 'Hebrew', year_peak: 2023, similar_names: [] },
+      { name: 'Ezra', sex: 'M', rank: 37, origin: 'Hebrew', year_peak: 2022, similar_names: [] },
+      { name: 'Ira', sex: 'M', rank: 690, origin: 'Hebrew', year_peak: 1918, similar_names: [] },
+      { name: 'Amos', sex: 'M', rank: 891, origin: 'Hebrew', year_peak: 1918, similar_names: [] },
+    ],
+  },
+  { id: '5', type: 'user', content: 'What do we already have on our list?' },
+  {
+    id: '6', type: 'assistant',
+    content: "You haven't saved any names yet — swipe or search to build your list, then come back for personalized suggestions.",
+    names: [],
+  },
+];
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -160,7 +213,7 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (messages.length > 0) {
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     }
   }, [messages.length]);
 
@@ -174,7 +227,6 @@ export default function ChatScreen() {
     setMessages((prev) => [...prev, userMsg, loadingMsg]);
     setInput('');
 
-    // Build conversation history from current messages (cap at 20)
     const history: ChatMessage[] = [
       ...messages
         .filter((m): m is UserMessage | AssistantMessage => m.type !== 'loading')
@@ -196,13 +248,15 @@ export default function ChatScreen() {
           setMessages((prev) => [...prev.filter((m) => m.type !== 'loading'), assistantMsg]);
         },
         onError: () => {
-          const errMsg: AssistantMessage = {
-            id: 'err-' + Date.now(),
-            type: 'assistant',
-            content: "Sorry, something went wrong. Please try again.",
-            names: [],
-          };
-          setMessages((prev) => [...prev.filter((m) => m.type !== 'loading'), errMsg]);
+          setMessages((prev) => [
+            ...prev.filter((m) => m.type !== 'loading'),
+            {
+              id: 'err-' + Date.now(),
+              type: 'assistant',
+              content: 'Something went wrong. Please try again.',
+              names: [],
+            },
+          ]);
         },
       },
     );
@@ -253,25 +307,33 @@ export default function ChatScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Ask AI</Text>
+        <View style={styles.headerTitleRow}>
+          <Ionicons name="sparkles" size={18} color={colors.primary} />
+          <Text style={styles.headerTitle}>Ask AI</Text>
+        </View>
+        <Text style={styles.headerSubtitle}>Explore names, get suggestions, ask anything</Text>
       </View>
 
       {isEmpty ? (
         <View style={styles.emptyState}>
-          <View style={styles.emptyIconWrap}>
-            <Ionicons name="sparkles" size={36} color={colors.primary} />
-          </View>
-          <Text style={styles.emptyTitle}>Explore names with AI</Text>
-          <Text style={styles.emptySubtitle}>Ask anything — style, origin, meaning, or get a curated list.</Text>
+          <Text style={styles.emptyPrompt}>Try asking…</Text>
           <ScrollView
             style={styles.suggestionsScroll}
             contentContainerStyle={styles.suggestionsContent}
             showsVerticalScrollIndicator={false}
           >
             {SUGGESTIONS.map((s) => (
-              <TouchableOpacity key={s} style={styles.suggestionChip} onPress={() => handleSend(s)}>
-                <Text style={styles.suggestionText}>{s}</Text>
-                <Ionicons name="arrow-forward" size={14} color={colors.primary} />
+              <TouchableOpacity
+                key={s.text}
+                style={styles.suggestionChip}
+                onPress={() => handleSend(s.text)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.suggestionIconWrap}>
+                  <Ionicons name={s.icon} size={16} color={colors.primary} />
+                </View>
+                <Text style={styles.suggestionText}>{s.text}</Text>
+                <Ionicons name="chevron-forward" size={14} color={colors.textMuted} />
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -304,7 +366,7 @@ export default function ChatScreen() {
             onPress={() => handleSend()}
             disabled={!input.trim() || isPending}
           >
-            <Ionicons name="send" size={18} color={colors.card} />
+            <Ionicons name="arrow-up" size={18} color={colors.card} />
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -318,121 +380,138 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xl + spacing.lg,
-    paddingBottom: spacing.sm,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: 2,
   },
   headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
+  headerSubtitle: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '400' },
 
   // Empty state
   emptyState: {
     flex: 1,
-    alignItems: 'center',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xl,
   },
-  emptyIconWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: radius.full,
-    backgroundColor: colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
+  emptyPrompt: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
     marginBottom: spacing.md,
   },
-  emptyTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text, marginBottom: spacing.sm },
-  emptySubtitle: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginBottom: spacing.lg,
-  },
-  suggestionsScroll: { width: '100%' },
-  suggestionsContent: { gap: spacing.sm, paddingBottom: spacing.lg },
+  suggestionsScroll: { flex: 1 },
+  suggestionsContent: { gap: spacing.sm, paddingBottom: spacing.xl },
   suggestionChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     backgroundColor: colors.card,
-    borderWidth: 1.5,
-    borderColor: colors.border,
     borderRadius: radius.lg,
-    paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
     gap: spacing.sm,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
   },
-  suggestionText: { flex: 1, fontSize: fontSize.sm, color: colors.text, fontWeight: '500' },
+  suggestionIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.sm,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  suggestionText: { flex: 1, fontSize: fontSize.sm, color: colors.text, fontWeight: '500', lineHeight: 20 },
 
   // Messages
-  messageList: { padding: spacing.md, gap: spacing.md, paddingBottom: spacing.lg },
+  messageList: { padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md },
 
   userRow: { alignItems: 'flex-end' },
   userBubble: {
     backgroundColor: colors.primary,
     borderRadius: radius.xl,
-    borderBottomRightRadius: radius.sm,
+    borderBottomRightRadius: 4,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    maxWidth: '80%',
+    paddingVertical: 10,
+    maxWidth: '78%',
   },
-  userBubbleText: { fontSize: fontSize.sm, color: colors.card, lineHeight: 20 },
+  userBubbleText: { fontSize: fontSize.sm, color: '#fff', lineHeight: 22, fontWeight: '500' },
 
-  assistantRow: { alignItems: 'flex-start' },
+  assistantRow: { alignItems: 'flex-start', flexDirection: 'column' },
   assistantBubble: {
-    backgroundColor: colors.card,
+    backgroundColor: '#F2F2F7',
     borderRadius: radius.xl,
-    borderBottomLeftRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderBottomLeftRadius: 4,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    maxWidth: '92%',
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.sm,
+    maxWidth: '88%',
+    alignSelf: 'flex-start',
   },
-  bubbleText: { fontSize: fontSize.sm, color: colors.text, lineHeight: 20 },
+  bubbleText: { fontSize: fontSize.sm, color: colors.text, lineHeight: 22 },
 
   // Loading dots
-  dotsRow: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: spacing.xs },
+  dotsRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 },
   dot: { width: 7, height: 7, borderRadius: radius.full, backgroundColor: colors.textMuted },
 
-  // Name cards strip
-  nameCardsSection: { marginTop: spacing.sm },
+  // Name cards strip — sits below the text bubble, full message width
+  nameCardsSection: { marginTop: spacing.xs, width: '100%' },
   addAllBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    marginBottom: spacing.xs,
-    marginLeft: 2,
+    marginBottom: spacing.sm,
   },
   addAllText: { fontSize: fontSize.xs, color: colors.primary, fontWeight: '600' },
-  nameCardsList: { gap: spacing.sm, paddingRight: spacing.sm, paddingBottom: spacing.xs, alignItems: 'flex-start' },
+  nameCardsList: { gap: spacing.sm, paddingRight: spacing.md, alignItems: 'flex-start' },
   nameCard: {
-    backgroundColor: colors.background,
+    backgroundColor: colors.card,
     borderRadius: radius.md,
-    borderWidth: 1.5,
-    borderColor: colors.border,
     padding: spacing.sm,
-    width: 120,
-    height: 110,
-    gap: 3,
+    width: 118,
+    height: 108,
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 1,
   },
-  nameCardSex: { fontSize: fontSize.xs, fontWeight: '700' },
+  nameCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  nameCardSex: { fontSize: 11, fontWeight: '700' },
   sexF: { color: colors.primary },
   sexM: { color: colors.secondary },
-  nameCardName: { fontSize: fontSize.md, fontWeight: '800', color: colors.text },
-  nameCardRank: { fontSize: fontSize.xs, color: colors.textMuted },
-  nameCardOrigin: { fontSize: fontSize.xs, color: colors.textMuted },
+  nameCardRank: { fontSize: 10, color: colors.textMuted },
+  nameCardName: { fontSize: fontSize.md, fontWeight: '800', color: colors.text, marginTop: 2 },
+  nameCardOrigin: { fontSize: 11, color: colors.textMuted },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    marginTop: spacing.xs,
-    paddingVertical: 4,
+    paddingVertical: 3,
     paddingHorizontal: spacing.sm,
     borderRadius: radius.full,
     borderWidth: 1,
     borderColor: colors.primary,
     alignSelf: 'flex-start',
   },
-  addBtnAdded: { borderColor: colors.success },
-  addBtnText: { fontSize: fontSize.xs, color: colors.primary, fontWeight: '600' },
+  addBtnAdded: { borderColor: colors.success, backgroundColor: '#F0FFF4' },
+  addBtnText: { fontSize: 11, color: colors.primary, fontWeight: '600' },
   addBtnTextAdded: { color: colors.success },
 
   // Input row
@@ -441,7 +520,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingTop: spacing.sm,
     paddingBottom: spacing.lg,
     borderTopWidth: 1,
     borderTopColor: colors.border,
@@ -451,18 +530,16 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: fontSize.sm,
     color: colors.text,
-    backgroundColor: colors.background,
-    borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderColor: colors.border,
+    backgroundColor: '#F2F2F7',
+    borderRadius: radius.xl,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    maxHeight: 120,
+    paddingVertical: 10,
+    maxHeight: 100,
     lineHeight: 20,
   },
   sendBtn: {
-    width: 40,
-    height: 40,
+    width: 36,
+    height: 36,
     borderRadius: radius.full,
     backgroundColor: colors.primary,
     alignItems: 'center',
