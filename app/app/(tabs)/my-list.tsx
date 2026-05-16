@@ -3,13 +3,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { PanGestureHandler, ScrollView, State } from 'react-native-gesture-handler';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { NestableDraggableFlatList, NestableScrollContainer, RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
 import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
-  LayoutAnimation,
   Modal,
   Platform,
   StyleSheet,
@@ -72,65 +71,28 @@ function NameRow({ name, onPress }: { name: string; onPress: () => void }) {
   );
 }
 
-const ITEM_HEIGHT = 56;
-
 function DraggableNameRow({
   name,
-  fromIdx,
-  panRef,
-  isDragging,
-  showDropAbove,
-  showDropBelow,
-  draggable,
+  drag,
+  isActive,
   onPress,
-  onDragStart,
-  onDragUpdate,
-  onDragEnd,
-  onDragCancel,
 }: {
   name: string;
-  fromIdx: number;
-  panRef: React.RefObject<PanGestureHandler>;
-  isDragging: boolean;
-  showDropAbove: boolean;
-  showDropBelow: boolean;
-  draggable: boolean;
+  drag: () => void;
+  isActive: boolean;
   onPress: () => void;
-  onDragStart: (idx: number) => void;
-  onDragUpdate: (idx: number, dy: number) => void;
-  onDragEnd: (idx: number, dy: number) => void;
-  onDragCancel: () => void;
 }) {
   return (
-    <>
-      {showDropAbove && <View style={styles.dropIndicator} />}
-      <View style={[styles.nameCard, isDragging && styles.nameCardDragging]}>
+    <ScaleDecorator activeScale={1.03}>
+      <View style={[styles.nameCard, isActive && styles.nameCardDragging]}>
         <TouchableOpacity style={styles.nameRow} onPress={onPress} activeOpacity={0.7}>
           <Text style={styles.nameText}>{name}</Text>
         </TouchableOpacity>
-        {draggable && (
-          <PanGestureHandler
-            ref={panRef}
-            onGestureEvent={(e) => onDragUpdate(fromIdx, e.nativeEvent.translationY)}
-            onHandlerStateChange={(e) => {
-              const { state, translationY } = e.nativeEvent;
-              if (state === State.ACTIVE) onDragStart(fromIdx);
-              else if (state === State.END) onDragEnd(fromIdx, translationY);
-              else if (state === State.CANCELLED || state === State.FAILED) onDragCancel();
-            }}
-          >
-            <View style={styles.gripArea}>
-              <Ionicons
-                name="reorder-three-outline"
-                size={24}
-                color={isDragging ? colors.primary : colors.textMuted}
-              />
-            </View>
-          </PanGestureHandler>
-        )}
+        <TouchableOpacity onPressIn={drag} style={styles.gripArea} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="reorder-three-outline" size={24} color={isActive ? colors.primary : colors.textMuted} />
+        </TouchableOpacity>
       </View>
-      {showDropBelow && <View style={styles.dropIndicator} />}
-    </>
+    </ScaleDecorator>
   );
 }
 
@@ -145,6 +107,7 @@ export default function MyListsScreen() {
   const [matchesExpanded, setMatchesExpanded] = useState(false);
   const [passedExpanded, setPassedExpanded] = useState(false);
   const [search, setSearch] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem('seen_my_lists').then((val) => {
@@ -157,11 +120,6 @@ export default function MyListsScreen() {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinCode, setJoinCode] = useState('');
   const joinInputRef = useRef<TextInput>(null);
-  const panRefMap = useRef(new Map<string, React.RefObject<PanGestureHandler>>());
-  const getPanRef = (name: string): React.RefObject<PanGestureHandler> => {
-    if (!panRefMap.current.has(name)) panRefMap.current.set(name, React.createRef<PanGestureHandler>());
-    return panRefMap.current.get(name)!;
-  };
 
   const myNames = partnerRole === 'A' ? data?.partnerA?.names ?? [] : data?.partnerB?.names ?? [];
   const matches = data?.matches ?? [];
@@ -200,43 +158,6 @@ export default function MyListsScreen() {
     return [...ordered, ...baseLiked.filter((n) => !inOrder.has(n))];
   }, [baseLiked, storedOrder]);
   const filteredLiked = orderedLiked.filter(matchSearch);
-
-  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
-  const [targetIdx, setTargetIdx] = useState<number | null>(null);
-  const orderedLikedRef = useRef(orderedLiked);
-  useEffect(() => { orderedLikedRef.current = orderedLiked; }, [orderedLiked]);
-
-  const handleDragStart = (idx: number) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setDraggingIdx(idx);
-    setTargetIdx(idx);
-  };
-
-  const handleDragUpdate = (fromIdx: number, dy: number) => {
-    const list = orderedLikedRef.current;
-    const to = Math.max(0, Math.min(list.length - 1, Math.round(fromIdx + dy / ITEM_HEIGHT)));
-    setTargetIdx(to);
-  };
-
-  const handleDragEnd = (fromIdx: number, dy: number) => {
-    const list = orderedLikedRef.current;
-    const to = Math.max(0, Math.min(list.length - 1, Math.round(fromIdx + dy / ITEM_HEIGHT)));
-    if (to !== fromIdx && listId) {
-      LayoutAnimation.easeInEaseOut();
-      const next = [...list];
-      const [item] = next.splice(fromIdx, 1);
-      next.splice(to, 0, item);
-      setOrder(listId, next);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    }
-    setDraggingIdx(null);
-    setTargetIdx(null);
-  };
-
-  const handleDragCancel = () => {
-    setDraggingIdx(null);
-    setTargetIdx(null);
-  };
 
   const filteredMatches = applyFilter(matches).filter(matchSearch);
   const filteredPassed = passedNames.filter(matchSearch);
@@ -313,11 +234,7 @@ export default function MyListsScreen() {
 
   return (
     <>
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.content}
-        waitFor={filteredLiked.map(name => getPanRef(name))}
-      >
+      <NestableScrollContainer style={styles.container} contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>My Lists</Text>
         </View>
@@ -355,7 +272,7 @@ export default function MyListsScreen() {
         </View>
 
         {/* Liked section */}
-        <View style={styles.section}>
+        <View style={[styles.section, isDragging && { overflow: 'visible' }]}>
           <SectionHeader
             title="Liked"
             count={filteredLiked.length}
@@ -371,23 +288,21 @@ export default function MyListsScreen() {
               </View>
             ) : (
               <View style={styles.sectionList}>
-                {filteredLiked.map((name, idx) => (
-                  <DraggableNameRow
-                    key={name}
-                    name={name}
-                    fromIdx={idx}
-                    panRef={getPanRef(name)}
-                    isDragging={draggingIdx === idx}
-                    showDropAbove={targetIdx === idx && draggingIdx !== null && idx < draggingIdx}
-                    showDropBelow={targetIdx === idx && draggingIdx !== null && idx > draggingIdx}
-                    draggable={!search}
-                    onPress={() => router.push(`/name/${name}`)}
-                    onDragStart={handleDragStart}
-                    onDragUpdate={handleDragUpdate}
-                    onDragEnd={handleDragEnd}
-                    onDragCancel={handleDragCancel}
-                  />
-                ))}
+                <NestableDraggableFlatList
+                  data={filteredLiked}
+                  keyExtractor={(name) => name}
+                  scrollEnabled={false}
+                  onDragBegin={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setIsDragging(true); }}
+                  onDragEnd={({ data }) => { if (listId) setOrder(listId, data); setIsDragging(false); }}
+                  renderItem={({ item: name, drag, isActive }: RenderItemParams<string>) => (
+                    <DraggableNameRow
+                      name={name}
+                      drag={drag}
+                      isActive={isActive}
+                      onPress={() => router.push(`/name/${name}`)}
+                    />
+                  )}
+                />
               </View>
             )
           )}
@@ -483,7 +398,7 @@ export default function MyListsScreen() {
             )
           )}
         </View>
-      </ScrollView>
+      </NestableScrollContainer>
 
       <Modal
         visible={showJoinModal}
