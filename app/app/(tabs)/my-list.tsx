@@ -3,17 +3,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { PanGestureHandler, ScrollView, State } from 'react-native-gesture-handler';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   KeyboardAvoidingView,
   LayoutAnimation,
   Modal,
-  PanResponder,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -64,51 +62,75 @@ function SectionHeader({
   );
 }
 
-const ITEM_HEIGHT = 58; // nameCard padding + text + marginBottom
-
-function NameRow({ name, onPress, onRemove }: { name: string; onPress: () => void; onRemove?: () => void }) {
+function NameRow({ name, onPress }: { name: string; onPress: () => void }) {
   return (
     <TouchableOpacity style={styles.nameCard} onPress={onPress} activeOpacity={0.7}>
       <View style={styles.nameRow}>
         <Text style={styles.nameText}>{name}</Text>
       </View>
-      {onRemove && (
-        <TouchableOpacity onPress={onRemove} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
-          <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
-        </TouchableOpacity>
-      )}
     </TouchableOpacity>
   );
 }
 
+const ITEM_HEIGHT = 56;
+
 function DraggableNameRow({
   name,
-  isActive,
-  dragY,
+  fromIdx,
+  panRef,
+  isDragging,
+  showDropAbove,
+  showDropBelow,
+  draggable,
   onPress,
-  gripHandlers,
+  onDragStart,
+  onDragUpdate,
+  onDragEnd,
+  onDragCancel,
 }: {
   name: string;
-  isActive: boolean;
-  dragY: Animated.Value;
+  fromIdx: number;
+  panRef: React.RefObject<PanGestureHandler>;
+  isDragging: boolean;
+  showDropAbove: boolean;
+  showDropBelow: boolean;
+  draggable: boolean;
   onPress: () => void;
-  gripHandlers: ReturnType<typeof PanResponder.create>['panHandlers'];
+  onDragStart: (idx: number) => void;
+  onDragUpdate: (idx: number, dy: number) => void;
+  onDragEnd: (idx: number, dy: number) => void;
+  onDragCancel: () => void;
 }) {
   return (
-    <Animated.View
-      style={[
-        styles.nameCard,
-        isActive && styles.nameCardDragging,
-        isActive && { transform: [{ translateY: dragY }], zIndex: 99 },
-      ]}
-    >
-      <TouchableOpacity style={styles.nameRow} onPress={onPress} activeOpacity={0.7}>
-        <Text style={styles.nameText}>{name}</Text>
-      </TouchableOpacity>
-      <View hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }} {...gripHandlers}>
-        <Ionicons name="reorder-three-outline" size={24} color={isActive ? colors.primary : colors.textMuted} />
+    <>
+      {showDropAbove && <View style={styles.dropIndicator} />}
+      <View style={[styles.nameCard, isDragging && styles.nameCardDragging]}>
+        <TouchableOpacity style={styles.nameRow} onPress={onPress} activeOpacity={0.7}>
+          <Text style={styles.nameText}>{name}</Text>
+        </TouchableOpacity>
+        {draggable && (
+          <PanGestureHandler
+            ref={panRef}
+            onGestureEvent={(e) => onDragUpdate(fromIdx, e.nativeEvent.translationY)}
+            onHandlerStateChange={(e) => {
+              const { state, translationY } = e.nativeEvent;
+              if (state === State.ACTIVE) onDragStart(fromIdx);
+              else if (state === State.END) onDragEnd(fromIdx, translationY);
+              else if (state === State.CANCELLED || state === State.FAILED) onDragCancel();
+            }}
+          >
+            <View style={styles.gripArea}>
+              <Ionicons
+                name="reorder-three-outline"
+                size={24}
+                color={isDragging ? colors.primary : colors.textMuted}
+              />
+            </View>
+          </PanGestureHandler>
+        )}
       </View>
-    </Animated.View>
+      {showDropBelow && <View style={styles.dropIndicator} />}
+    </>
   );
 }
 
@@ -116,8 +138,7 @@ export default function MyListsScreen() {
   const router = useRouter();
   const { listId, deviceId, partnerRole, code, setSession, clearSession, defaultSex } = useSessionStore();
   const [sexFilter, setSexFilter] = useState<SexFilter>(() => (defaultSex === 'F' || defaultSex === 'M' ? defaultSex : 'U'));
-  const { data, isLoading, refetch } = useList(listId);
-  const { data: likedSwipes = [] } = useSwipedNames(deviceId, true, sexFilter);
+  const { data, isLoading } = useList(listId);
   const { data: passedNames = [] } = useSwipedNames(deviceId, false, sexFilter);
   const { mutate: joinList, isPending: isJoining, error: joinError, reset: resetJoin } = useJoinList();
   const [likedExpanded, setLikedExpanded] = useState(false);
@@ -136,6 +157,11 @@ export default function MyListsScreen() {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinCode, setJoinCode] = useState('');
   const joinInputRef = useRef<TextInput>(null);
+  const panRefMap = useRef(new Map<string, React.RefObject<PanGestureHandler>>());
+  const getPanRef = (name: string): React.RefObject<PanGestureHandler> => {
+    if (!panRefMap.current.has(name)) panRefMap.current.set(name, React.createRef<PanGestureHandler>());
+    return panRefMap.current.get(name)!;
+  };
 
   const myNames = partnerRole === 'A' ? data?.partnerA?.names ?? [] : data?.partnerB?.names ?? [];
   const matches = data?.matches ?? [];
@@ -156,17 +182,16 @@ export default function MyListsScreen() {
     });
   }
 
-  // Stable fallback — avoids the [] !== [] infinite re-render loop in useSyncExternalStore
   const EMPTY_ORDER = useRef<string[]>([]).current;
   const storedOrder = useListOrderStore((s) => s.orders[listId ?? ''] ?? EMPTY_ORDER);
   const setOrder = useListOrderStore((s) => s.setOrder);
 
-  const likedSwipesSet = useMemo(() => new Set(likedSwipes), [likedSwipes]);
   const matchSearch = (n: string) => !search || n.toLowerCase().includes(search.toLowerCase());
 
   const baseLiked = useMemo(
-    () => myNames.filter((n) => likedSwipesSet.has(n)),
-    [myNames, likedSwipesSet],
+    () => applyFilter(myNames),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [myNames, sexMap, sexFilter],
   );
   const orderedLiked = useMemo(() => {
     const likedSet = new Set(baseLiked);
@@ -176,37 +201,42 @@ export default function MyListsScreen() {
   }, [baseLiked, storedOrder]);
   const filteredLiked = orderedLiked.filter(matchSearch);
 
-  // Drag-to-reorder state — declared after orderedLiked so the ref is valid
-  const [draggingName, setDraggingName] = useState<string | null>(null);
-  const dragY = useRef(new Animated.Value(0)).current;
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
+  const [targetIdx, setTargetIdx] = useState<number | null>(null);
   const orderedLikedRef = useRef(orderedLiked);
   useEffect(() => { orderedLikedRef.current = orderedLiked; }, [orderedLiked]);
 
-  const makeDragHandlers = (name: string, idx: number) =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        dragY.setValue(0);
-        setDraggingName(name);
-      },
-      onPanResponderMove: (_, { dy }) => dragY.setValue(dy),
-      onPanResponderRelease: (_, { dy }) => {
-        const list = orderedLikedRef.current;
-        const toIdx = Math.max(0, Math.min(list.length - 1, idx + Math.round(dy / ITEM_HEIGHT)));
-        if (toIdx !== idx && listId) {
-          LayoutAnimation.easeInEaseOut();
-          const next = [...list];
-          const [item] = next.splice(idx, 1);
-          next.splice(toIdx, 0, item);
-          setOrder(listId, next);
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        }
-        dragY.setValue(0);
-        setDraggingName(null);
-      },
-      onPanResponderTerminate: () => { dragY.setValue(0); setDraggingName(null); },
-    }).panHandlers;
+  const handleDragStart = (idx: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setDraggingIdx(idx);
+    setTargetIdx(idx);
+  };
+
+  const handleDragUpdate = (fromIdx: number, dy: number) => {
+    const list = orderedLikedRef.current;
+    const to = Math.max(0, Math.min(list.length - 1, Math.round(fromIdx + dy / ITEM_HEIGHT)));
+    setTargetIdx(to);
+  };
+
+  const handleDragEnd = (fromIdx: number, dy: number) => {
+    const list = orderedLikedRef.current;
+    const to = Math.max(0, Math.min(list.length - 1, Math.round(fromIdx + dy / ITEM_HEIGHT)));
+    if (to !== fromIdx && listId) {
+      LayoutAnimation.easeInEaseOut();
+      const next = [...list];
+      const [item] = next.splice(fromIdx, 1);
+      next.splice(to, 0, item);
+      setOrder(listId, next);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+    setDraggingIdx(null);
+    setTargetIdx(null);
+  };
+
+  const handleDragCancel = () => {
+    setDraggingIdx(null);
+    setTargetIdx(null);
+  };
 
   const filteredMatches = applyFilter(matches).filter(matchSearch);
   const filteredPassed = passedNames.filter(matchSearch);
@@ -283,7 +313,11 @@ export default function MyListsScreen() {
 
   return (
     <>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        waitFor={filteredLiked.map(name => getPanRef(name))}
+      >
         <View style={styles.header}>
           <Text style={styles.headerTitle}>My Lists</Text>
         </View>
@@ -341,10 +375,17 @@ export default function MyListsScreen() {
                   <DraggableNameRow
                     key={name}
                     name={name}
-                    isActive={draggingName === name}
-                    dragY={dragY}
+                    fromIdx={idx}
+                    panRef={getPanRef(name)}
+                    isDragging={draggingIdx === idx}
+                    showDropAbove={targetIdx === idx && draggingIdx !== null && idx < draggingIdx}
+                    showDropBelow={targetIdx === idx && draggingIdx !== null && idx > draggingIdx}
+                    draggable={!search}
                     onPress={() => router.push(`/name/${name}`)}
-                    gripHandlers={makeDragHandlers(name, idx)}
+                    onDragStart={handleDragStart}
+                    onDragUpdate={handleDragUpdate}
+                    onDragEnd={handleDragEnd}
+                    onDragCancel={handleDragCancel}
                   />
                 ))}
               </View>
@@ -576,13 +617,21 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.sm,
   },
-  nameCardDragging: { borderColor: colors.primary, backgroundColor: colors.primaryLight, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.15, shadowRadius: 10, elevation: 8 },
+  nameCardDragging: {
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  dropIndicator: { height: 3, backgroundColor: colors.primary, borderRadius: 2, marginHorizontal: spacing.sm, marginVertical: 1 },
   matchCard: { borderWidth: 1.5, borderColor: colors.match + '60' },
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  sexIcon: { fontSize: fontSize.sm, fontWeight: '700' },
-  sexF: { color: colors.primary },
-  sexM: { color: colors.secondary },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1 },
   nameText: { fontSize: fontSize.md, fontWeight: '600', color: colors.text },
+  gripArea: { padding: 12 },
   matchEmoji: { fontSize: 18 },
   waitingSection: { paddingHorizontal: spacing.md, paddingBottom: spacing.md, alignItems: 'center', gap: spacing.md },
   waitingText: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center' },
@@ -603,7 +652,6 @@ const styles = StyleSheet.create({
   joinCodeBtnText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.primary },
   muted: { color: colors.textMuted, fontSize: fontSize.sm },
   devReset: { fontSize: fontSize.md, color: colors.textMuted },
-  // Modal
   modalOverlay: { flex: 1, justifyContent: 'flex-end' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
   modalSheet: {
