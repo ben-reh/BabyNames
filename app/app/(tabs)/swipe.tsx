@@ -127,14 +127,14 @@ export default function SwipeScreen() {
     }
   }, [filterKey, data]);
 
-  // When liked names change, filter them out of the existing queue in-place
-  // rather than rebuilding — preserves card order for the current session.
+  // When liked names change, filter them out of the queue — but ONLY beyond the
+  // visible stack. Removing anything at idx ≤ pos+2 would shift cardIndex's
+  // referent and cause the visible card to jump (the source of the swipe-right flash).
   useEffect(() => {
-    setQueue((prev) => prev.filter(
-      // Keep the just-swiped card in place — removing it would shift cardIndex
-      // and cause a one-frame flash of the wrong card. It gets cleaned up on next poll.
-      (n) => !likedNamesRef.current.has(n.name) || n.name === justSwipedRef.current,
-    ));
+    setQueue((prev) => {
+      const pos = cardIndexRef.current;
+      return prev.filter((n, idx) => idx <= pos + 2 || !likedNamesRef.current.has(n.name));
+    });
     justSwipedRef.current = null;
   }, [likedNames]);
 
