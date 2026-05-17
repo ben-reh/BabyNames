@@ -89,27 +89,36 @@ function sexClause(sex: string | undefined): string {
 let schemaMigrated = false;
 async function ensureSchema(pool: ReturnType<typeof getPool>) {
   if (schemaMigrated) return;
-  try {
-    // user_swipes: add sex_context, backfill NULLs, make NOT NULL, swap unique constraint
-    await pool.query(`ALTER TABLE user_swipes ADD COLUMN IF NOT EXISTS sex_context TEXT`);
-    await pool.query(`UPDATE user_swipes SET sex_context = 'U' WHERE sex_context IS NULL`);
-    await pool.query(`ALTER TABLE user_swipes ALTER COLUMN sex_context SET NOT NULL`);
-    await pool.query(`ALTER TABLE user_swipes ALTER COLUMN sex_context SET DEFAULT 'U'`);
-    await pool.query(`ALTER TABLE user_swipes DROP CONSTRAINT IF EXISTS user_swipes_pkey`);
-    await pool.query(`ALTER TABLE user_swipes DROP CONSTRAINT IF EXISTS user_swipes_user_id_name_key`);
-    await pool.query(`DO $$ BEGIN ALTER TABLE user_swipes ADD CONSTRAINT user_swipes_user_id_name_ctx UNIQUE (user_id, name, sex_context); EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
+  // Run each migration step independently — a previously-applied step must not block later ones
+  const run = async (sql: string) => { try { await pool.query(sql); } catch { /* already applied */ } };
 
-    // user_taste: add sex_context, swap unique constraint to (user_id, sex_context)
-    await pool.query(`ALTER TABLE user_taste ADD COLUMN IF NOT EXISTS sex_context TEXT NOT NULL DEFAULT 'U'`);
-    await pool.query(`ALTER TABLE user_taste DROP CONSTRAINT IF EXISTS user_taste_pkey`);
-    await pool.query(`ALTER TABLE user_taste DROP CONSTRAINT IF EXISTS user_taste_user_id_key`);
-    await pool.query(`DO $$ BEGIN ALTER TABLE user_taste ADD CONSTRAINT user_taste_user_id_ctx UNIQUE (user_id, sex_context); EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
+  await run(`ALTER TABLE user_swipes ADD COLUMN IF NOT EXISTS sex_context TEXT`);
+  await run(`UPDATE user_swipes SET sex_context = 'U' WHERE sex_context IS NULL`);
+  await run(`ALTER TABLE user_swipes ALTER COLUMN sex_context SET NOT NULL`);
+  await run(`ALTER TABLE user_swipes ALTER COLUMN sex_context SET DEFAULT 'U'`);
+  await run(`ALTER TABLE user_swipes DROP CONSTRAINT IF EXISTS user_swipes_pkey`);
+  await run(`ALTER TABLE user_swipes DROP CONSTRAINT IF EXISTS user_swipes_user_id_name_key`);
+  await run(`ALTER TABLE user_swipes ADD CONSTRAINT user_swipes_user_id_name_ctx UNIQUE (user_id, name, sex_context)`);
 
-    schemaMigrated = true;
-  } catch (e) {
-    console.error('Schema migration error (will retry):', e);
-    // Don't set schemaMigrated — allow retry on next invocation
-  }
+  await run(`ALTER TABLE user_taste ADD COLUMN IF NOT EXISTS sex_context TEXT NOT NULL DEFAULT 'U'`);
+  await run(`ALTER TABLE user_taste DROP CONSTRAINT IF EXISTS user_taste_pkey`);
+  await run(`ALTER TABLE user_taste DROP CONSTRAINT IF EXISTS user_taste_user_id_key`);
+  await run(`ALTER TABLE user_taste ADD CONSTRAINT user_taste_user_id_ctx UNIQUE (user_id, sex_context)`);
+
+  // Ensure embedding is vector(564) — if wrong dimension, wipe stale taste data and retype
+  await pool.query(`DO $$
+    DECLARE col_type text;
+    BEGIN
+      SELECT pg_catalog.format_type(atttypid, atttypmod) INTO col_type
+      FROM pg_attribute
+      WHERE attrelid = 'user_taste'::regclass AND attname = 'embedding' AND NOT attisdropped;
+      IF col_type IS DISTINCT FROM 'vector(564)' THEN
+        TRUNCATE user_taste;
+        EXECUTE 'ALTER TABLE user_taste ALTER COLUMN embedding TYPE vector(564)';
+      END IF;
+    END $$`);
+
+  schemaMigrated = true;
 }
 
 async function enrichNames(names: string[], rankSex?: string) {
@@ -315,7 +324,9 @@ export async function recordSwipe(deviceId: string, body: Record<string, unknown
   if (vectorResult.rows.length === 0) {
     return err(404, `name not found: ${name}`);
   }
-  const nameEmbedding = vectorResult.rows[0].embedding;
+  // Parse pgvector string "[0.1,0.2,...]" → number[]
+  const nameVec: number[] = (vectorResult.rows[0].embedding as unknown as string)
+    .slice(1, -1).split(',').map(Number);
 
   // Per-context swipe record — same name can be swiped in multiple sex contexts
   await pool.query(
@@ -325,20 +336,42 @@ export async function recordSwipe(deviceId: string, body: Record<string, unknown
     [deviceId, name, liked, sex_context],
   );
 
-  // Update per-context taste vector
+  // Compute updated taste vector in JS — pgvector doesn't support vector * scalar
   const weight = liked ? 1.0 : -0.5;
+
+  const tasteRow = await pool.query<{ embedding: string; liked_count: number; disliked_count: number }>(
+    'SELECT embedding, liked_count, disliked_count FROM user_taste WHERE user_id = $1 AND sex_context = $2',
+    [deviceId, sex_context],
+  );
+
+  let newVec: number[];
+  let newLiked: number;
+  let newDisliked: number;
+
+  if (tasteRow.rows.length === 0) {
+    newVec = nameVec.map((v) => v * weight);
+    newLiked = liked ? 1 : 0;
+    newDisliked = liked ? 0 : 1;
+  } else {
+    const row = tasteRow.rows[0];
+    const curVec: number[] = (row.embedding as unknown as string).slice(1, -1).split(',').map(Number);
+    const total = row.liked_count + row.disliked_count;
+    newVec = curVec.map((v, i) => (v * total + nameVec[i] * weight) / (total + 1));
+    newLiked = row.liked_count + (liked ? 1 : 0);
+    newDisliked = row.disliked_count + (liked ? 0 : 1);
+  }
+
+  const embeddingStr = `[${newVec.join(',')}]`;
+
   await pool.query(
     `INSERT INTO user_taste (user_id, sex_context, embedding, liked_count, disliked_count, updated_at)
-     VALUES ($1, $6, ($2::vector * $3::float8), $4, $5, NOW())
+     VALUES ($1, $2, $3::vector, $4, $5, NOW())
      ON CONFLICT (user_id, sex_context) DO UPDATE SET
-       embedding      = (
-         user_taste.embedding * (user_taste.liked_count + user_taste.disliked_count)::float8
-           + $2::vector * $3::float8
-       ) * (1.0 / (user_taste.liked_count + user_taste.disliked_count + 1)::float8),
-       liked_count    = user_taste.liked_count    + $4,
-       disliked_count = user_taste.disliked_count + $5,
+       embedding      = EXCLUDED.embedding,
+       liked_count    = EXCLUDED.liked_count,
+       disliked_count = EXCLUDED.disliked_count,
        updated_at     = NOW()`,
-    [deviceId, nameEmbedding, weight, liked ? 1 : 0, liked ? 0 : 1, sex_context],
+    [deviceId, sex_context, embeddingStr, newLiked, newDisliked],
   );
 
   return ok({ ok: true });

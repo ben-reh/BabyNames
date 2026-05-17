@@ -52,6 +52,9 @@ export default function SwipeScreen() {
   const mountTimeRef = useRef(Date.now());
   const firstCardLoggedRef = useRef(false);
   const lastSwipeTimeRef = useRef<number | null>(null);
+  // Tracks the card just swiped so the likedNames filter doesn't shift the queue
+  // and cause a one-frame flash of the wrong card. Cleared after the next filter pass.
+  const justSwipedRef = useRef<string | null>(null);
   const addName = useAddName(listId!);
   const { mutate: recordSwipe } = useRecordSwipe();
 
@@ -126,7 +129,12 @@ export default function SwipeScreen() {
   // When liked names change, filter them out of the existing queue in-place
   // rather than rebuilding — preserves card order for the current session.
   useEffect(() => {
-    setQueue((prev) => prev.filter((n) => !likedNamesRef.current.has(n.name)));
+    setQueue((prev) => prev.filter(
+      // Keep the just-swiped card in place — removing it would shift cardIndex
+      // and cause a one-frame flash of the wrong card. It gets cleaned up on next poll.
+      (n) => !likedNamesRef.current.has(n.name) || n.name === justSwipedRef.current,
+    ));
+    justSwipedRef.current = null;
   }, [likedNames]);
 
   // Time-to-first-card: log once when the queue first becomes non-empty
@@ -154,6 +162,7 @@ export default function SwipeScreen() {
       const now = Date.now();
       logSwipe('right', name.name, queue.length - idx - 1, lastSwipeTimeRef.current ? now - lastSwipeTimeRef.current : null);
       lastSwipeTimeRef.current = now;
+      justSwipedRef.current = name.name;
       addSeen(name.name);
       addName.mutate({ deviceId, name: name.name });
       recordSwipe({ deviceId, name: name.name, liked: true, sex_context: filters.sex });
