@@ -189,6 +189,7 @@ export async function getRecommendations(deviceId: string, params: Params) {
     const actualPopularSize = POPULAR_SIZE + Math.round(extraSlots * 0.5);
     const actualExplorationSize = EXPLORATION_SIZE + (extraSlots - Math.round(extraSlots * 0.5));
 
+    const tQueries = Date.now();
     const [similarityResult, explorationResult, popularResult] = await Promise.all([
       actualSimilaritySize > 0
         ? pool.query<{ name: string }>(
@@ -222,6 +223,8 @@ export async function getRecommendations(deviceId: string, params: Params) {
         originArr ? [deviceId, POPULAR_POOL, originArr] : [deviceId, POPULAR_POOL],
       ),
     ]);
+
+    console.log(JSON.stringify({ event: 'rec_queries', duration_ms: Date.now() - tQueries, liked_count: likedCount, sim_weight: simWeight, counts: { similarity: similarityResult.rows.length, exploration: explorationResult.rows.length, popular: popularResult.rows.length } }));
 
     const pool60 = similarityResult.rows.map((r: { name: string }) => r.name);
     for (let i = pool60.length - 1; i > 0; i--) {

@@ -81,35 +81,50 @@ function NameCard({
   onAdd: () => void;
   onPress: () => void;
 }) {
+  const isFemale = nameResult.sex === 'F';
+  const accentColor = isFemale ? colors.primary : colors.secondary;
+  const accentLight = isFemale ? colors.primaryLight : '#EEF3FD';
+
   return (
     <TouchableOpacity style={styles.nameCard} onPress={onPress} activeOpacity={0.7}>
-      <View style={styles.nameCardTop}>
-        <Text style={[styles.nameCardSex, nameResult.sex === 'F' ? styles.sexF : styles.sexM]}>
-          {nameResult.sex === 'F' ? '♀' : '♂'}
-        </Text>
-        {nameResult.rank && (
-          <Text style={styles.nameCardRank}>#{nameResult.rank}</Text>
-        )}
+      {/* Color accent bar at top */}
+      <View style={[styles.nameCardAccent, { backgroundColor: accentColor }]} />
+
+      <View style={styles.nameCardBody}>
+        {/* Name + rank row */}
+        <View style={styles.nameCardTop}>
+          <Text style={styles.nameCardName} numberOfLines={1}>{nameResult.name}</Text>
+          {nameResult.rank && (
+            <Text style={styles.nameCardRank}>#{nameResult.rank}</Text>
+          )}
+        </View>
+
+        {/* Origin + year */}
+        <View style={styles.nameCardMeta}>
+          {nameResult.origin && (
+            <Text style={styles.nameCardOrigin} numberOfLines={1}>{nameResult.origin}</Text>
+          )}
+          {nameResult.year_peak && (
+            <Text style={styles.nameCardYear}>Peak {nameResult.year_peak}</Text>
+          )}
+        </View>
+
+        {/* Add button */}
+        <TouchableOpacity
+          style={[styles.addBtn, isAdded ? styles.addBtnAdded : { backgroundColor: accentLight, borderColor: accentColor }]}
+          onPress={onAdd}
+          disabled={isAdded}
+        >
+          <Ionicons
+            name={isAdded ? 'checkmark' : 'add'}
+            size={13}
+            color={isAdded ? colors.success : accentColor}
+          />
+          <Text style={[styles.addBtnText, isAdded ? styles.addBtnTextAdded : { color: accentColor }]}>
+            {isAdded ? 'Added' : 'Add to list'}
+          </Text>
+        </TouchableOpacity>
       </View>
-      <Text style={styles.nameCardName} numberOfLines={1}>{nameResult.name}</Text>
-      {nameResult.origin && (
-        <Text style={styles.nameCardOrigin} numberOfLines={1}>{nameResult.origin}</Text>
-      )}
-      <TouchableOpacity
-        style={[styles.addBtn, isAdded && styles.addBtnAdded]}
-        onPress={onAdd}
-        disabled={isAdded}
-        hitSlop={{ top: 6, right: 6, bottom: 6, left: 6 }}
-      >
-        <Ionicons
-          name={isAdded ? 'checkmark' : 'add'}
-          size={12}
-          color={isAdded ? colors.success : colors.primary}
-        />
-        <Text style={[styles.addBtnText, isAdded && styles.addBtnTextAdded]}>
-          {isAdded ? 'Added' : 'Add'}
-        </Text>
-      </TouchableOpacity>
     </TouchableOpacity>
   );
 }
@@ -474,36 +489,41 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   addAllText: { fontSize: fontSize.xs, color: colors.primary, fontWeight: '600' },
-  nameCardsList: { gap: spacing.sm, paddingRight: spacing.md, alignItems: 'flex-start' },
+  nameCardsList: { gap: spacing.sm, paddingLeft: 2, paddingRight: spacing.md, paddingBottom: spacing.xs, alignItems: 'flex-start' },
   nameCard: {
     backgroundColor: colors.card,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    width: 118,
-    height: 108,
-    justifyContent: 'space-between',
+    borderRadius: radius.lg,
+    width: 148,
+    overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  nameCardAccent: { height: 4, width: '100%' },
+  nameCardBody: {
+    padding: spacing.sm,
+    gap: 4,
   },
   nameCardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
-  nameCardSex: { fontSize: 11, fontWeight: '700' },
+  nameCardName: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text, flex: 1 },
+  nameCardRank: { fontSize: 11, color: colors.textMuted, marginTop: 3 },
+  nameCardMeta: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
+  nameCardOrigin: { fontSize: 11, color: colors.textMuted },
+  nameCardYear: { fontSize: 11, color: colors.textMuted },
   sexF: { color: colors.primary },
   sexM: { color: colors.secondary },
-  nameCardRank: { fontSize: 10, color: colors.textMuted },
-  nameCardName: { fontSize: fontSize.md, fontWeight: '800', color: colors.text, marginTop: 2 },
-  nameCardOrigin: { fontSize: 11, color: colors.textMuted },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    paddingVertical: 3,
+    marginTop: 2,
+    paddingVertical: 5,
     paddingHorizontal: spacing.sm,
     borderRadius: radius.full,
     borderWidth: 1,
@@ -511,7 +531,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   addBtnAdded: { borderColor: colors.success, backgroundColor: '#F0FFF4' },
-  addBtnText: { fontSize: 11, color: colors.primary, fontWeight: '600' },
+  addBtnText: { fontSize: 11, fontWeight: '600' },
   addBtnTextAdded: { color: colors.success },
 
   // Input row

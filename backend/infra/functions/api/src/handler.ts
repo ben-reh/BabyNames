@@ -7,6 +7,10 @@ import { err } from './utils';
 
 type Params = Record<string, string | undefined>;
 
+function log(event: string, props: Record<string, unknown>) {
+  console.log(JSON.stringify({ event, ts: new Date().toISOString(), ...props }));
+}
+
 function parseBody(event: APIGatewayProxyEvent): Record<string, unknown> {
   try {
     return event.body ? JSON.parse(event.body) : {};
@@ -18,90 +22,97 @@ function parseBody(event: APIGatewayProxyEvent): Record<string, unknown> {
 export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
   const { httpMethod: method, path, queryStringParameters } = event;
   const params = (queryStringParameters ?? {}) as Params;
+  const t0 = Date.now();
+
+  const respond = (result: APIGatewayProxyResult, extra?: Record<string, unknown>) => {
+    log('request', { method, path, status: result.statusCode, duration_ms: Date.now() - t0, ...extra });
+    return result;
+  };
 
   try {
     // --- Recommendations routes ---
     if (method === 'GET' && path === '/recommendations') {
-      if (!params.deviceId) return err(400, 'deviceId is required');
-      return await getRecommendations(params.deviceId, params);
+      if (!params.deviceId) return respond(err(400, 'deviceId is required'));
+      return respond(await getRecommendations(params.deviceId, params), { device_id: params.deviceId, sex: params.sex });
     }
 
     if (method === 'GET' && path === '/swipes') {
-      if (!params.deviceId) return err(400, 'deviceId is required');
+      if (!params.deviceId) return respond(err(400, 'deviceId is required'));
       const liked = params.liked !== 'false';
-      return await getUserSwipes(params.deviceId, liked, params.sex);
+      return respond(await getUserSwipes(params.deviceId, liked, params.sex));
     }
 
     if (method === 'POST' && path === '/swipe') {
       const body = parseBody(event);
-      if (!body.deviceId) return err(400, 'deviceId is required');
-      return await recordSwipe(body.deviceId as string, body);
+      if (!body.deviceId) return respond(err(400, 'deviceId is required'));
+      return respond(await recordSwipe(body.deviceId as string, body), { name: body.name, liked: body.liked, sex_context: body.sex_context });
     }
 
     // --- Names routes ---
     if (method === 'GET' && path === '/names/search') {
-      return await searchNames(params);
+      return respond(await searchNames(params), { q: params.q });
     }
 
     if (method === 'GET' && path === '/names/rankings') {
-      return await getRankings(params);
+      return respond(await getRankings(params));
     }
 
     if (method === 'GET' && path === '/names/batch') {
-      return await getBatchNames(params);
+      return respond(await getBatchNames(params));
     }
 
     const popularityMatch = path.match(/^\/names\/([^/]+)\/popularity$/);
     if (method === 'GET' && popularityMatch) {
-      return await getPopularity(decodeURIComponent(popularityMatch[1]), params);
+      return respond(await getPopularity(decodeURIComponent(popularityMatch[1]), params));
     }
 
     const rankMatch = path.match(/^\/names\/([^/]+)\/rank$/);
     if (method === 'GET' && rankMatch) {
-      return await getNameRank(decodeURIComponent(rankMatch[1]), params);
+      return respond(await getNameRank(decodeURIComponent(rankMatch[1]), params));
     }
 
     const nameMatch = path.match(/^\/names\/([^/]+)$/);
     if (method === 'GET' && nameMatch) {
-      return await getName(decodeURIComponent(nameMatch[1]));
+      return respond(await getName(decodeURIComponent(nameMatch[1])));
     }
 
     if (method === 'GET' && path === '/names') {
-      return await getNames(params);
+      return respond(await getNames(params));
     }
 
     // --- Lists routes ---
     if (method === 'POST' && path === '/lists') {
-      return await createList(parseBody(event));
+      return respond(await createList(parseBody(event)));
     }
 
     if (method === 'POST' && path === '/lists/join') {
-      return await joinList(parseBody(event));
+      return respond(await joinList(parseBody(event)));
     }
 
     const listMatch = path.match(/^\/lists\/([^/]+)$/);
     if (method === 'GET' && listMatch) {
-      return await getList(decodeURIComponent(listMatch[1]));
+      return respond(await getList(decodeURIComponent(listMatch[1])));
     }
 
     const listNamesMatch = path.match(/^\/lists\/([^/]+)\/names$/);
     if (method === 'POST' && listNamesMatch) {
       const body = parseBody(event);
-      return await addName(decodeURIComponent(listNamesMatch[1]), body.name as string, body);
+      return respond(await addName(decodeURIComponent(listNamesMatch[1]), body.name as string, body), { name: body.name });
     }
 
     const listNameMatch = path.match(/^\/lists\/([^/]+)\/names\/([^/]+)$/);
     if (method === 'DELETE' && listNameMatch) {
-      return await removeName(
+      return respond(await removeName(
         decodeURIComponent(listNameMatch[1]),
         decodeURIComponent(listNameMatch[2]),
         parseBody(event),
-      );
+      ));
     }
 
-    return err(404, 'Not found');
+    return respond(err(404, 'Not found'));
   } catch (e) {
     console.error(e);
+    log('request', { method, path, status: 500, duration_ms: Date.now() - t0, error: String(e) });
     return err(500, 'Internal server error');
   }
 }

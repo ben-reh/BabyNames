@@ -173,7 +173,21 @@ async function toolGetLikedNames(input: { listId: string }): Promise<unknown> {
   const partnerB = (result.Item.partnerB as { names?: string[] })?.names ?? [];
   const matches = (result.Item.matches as string[]) ?? [];
 
-  return { your_names: partnerA, partner_names: partnerB, matches };
+  // Hydrate all unique liked names into NameResult objects so they appear as cards
+  const allLiked = [...new Set([...partnerA, ...partnerB])];
+  if (allLiked.length === 0) return { names: [], matches, message: 'No names saved yet.' };
+
+  const batchResult = await ddb.send(
+    new BatchGetCommand({
+      RequestItems: { [NAMES_TABLE]: { Keys: allLiked.slice(0, 100).map((n) => ({ name: n })) } },
+    }),
+  );
+
+  const hydrated = ((batchResult.Responses?.[NAMES_TABLE] ?? []) as Record<string, unknown>[])
+    .map(toNameResult)
+    .sort((a, b) => partnerA.indexOf(a.name) - partnerA.indexOf(b.name));
+
+  return { names: hydrated, matches };
 }
 
 async function executeTool(
@@ -267,7 +281,7 @@ const TOOLS = [
 function buildSystemPrompt(sex: string | null, listId: string | null | undefined): string {
   const sexContext = sex === 'F' ? 'girl names' : sex === 'M' ? 'boy names' : 'names of any gender';
   const listContext = listId
-    ? ''
+    ? `\nThe user's list ID is "${listId}". When asked about their saved names or for personalized suggestions, call get_liked_names("${listId}") to see what they've liked.`
     : '\nThe user has not set up a partner list yet, so get_liked_names will not work. If asked about their list, tell them they can save names by swiping or searching, then come back to ask for personalized suggestions.';
   const today = new Date().toISOString().split('T')[0];
   return `${listContext}You are an expert baby name advisor helping parents explore and choose names. You have access to a US baby name database with SSA popularity rankings (1=most popular), cultural origins, and precomputed similar-name relationships.
@@ -279,14 +293,22 @@ IMPORTANT FORMATTING RULES:
 
 Use your tools proactively:
 - For a specific name → call get_name_info
-- For style/vibe requests → call search_names. Style mappings: "Southern" → origins=["English","Hebrew"] max_rank=2000, "classic/vintage" → origins=["Latin","Greek","English"] max_rank=1000, "nature" → origins=["English"] max_rank=5000, "biblical" → origins=["Hebrew"] max_rank=3000
-- For one-syllable names → use max_name_length=4 (most one-syllable names are 3-4 chars: Rex, Hank, Jack, Lee, Cole)
-- For personalized suggestions → call get_liked_names first if listId is available
-- Try multiple search_names calls with different parameters if the first returns few results
+CRITICAL: Names ONLY appear as tappable cards if returned by a tool call. Names you mention in prose text do NOT become cards. So if you want names to show as cards, you MUST call a tool.
 
-When you find names, they appear as tappable cards in the UI automatically — do not list them again in your prose. Write a 1–2 sentence intro only, then let the cards do the work.
-Keep all replies concise — parents are reading on a phone.
-If a name isn't in the database, say so rather than inventing data.
+Tool usage rules:
+- "Tell me about [name]" → call get_name_info(name)
+- "Names like [name]" / "similar to [name]" → call search_names(similar_to: name). Do NOT list similar names from memory — call the tool so they appear as cards.
+- Style requests ("Southern vintage", "nature names") → call search_names with origins + max_rank filters
+  - Southern → origins=["English","Hebrew"] max_rank=2000
+  - Classic/vintage → origins=["Latin","Greek","English"] max_rank=1000
+  - Nature → origins=["English"] max_rank=5000
+  - Biblical → origins=["Hebrew"] max_rank=3000
+- One-syllable → add max_name_length=4
+- "What's on our list?" / "what have we saved?" / personalized suggestions → call get_liked_names with the listId from your context above
+- You can call multiple tools per turn
+
+After tool calls, write a 1-sentence intro only. The cards show the names — do not list them in prose.
+Keep replies concise. If a name isn't in the database, say so.
 
 The user's current sex filter is ${sexContext}. Apply as default.
 Today: ${today}. Most recent SSA data: 2025.`;

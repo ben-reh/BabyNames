@@ -11,6 +11,7 @@ import { useRecordSwipe } from '../../src/api/swipe';
 import type { Name } from '../../src/api/types';
 import { useSessionStore, useFilterStore, useSeenNamesStore } from '../../src/store';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
+import { logSwipe, logTimeToFirstCard, logQueueFetch, logQueueRebuild } from '../../src/utils/analytics';
 
 const CARD_BG: Record<string, string> = {
   F: colors.primaryLight,
@@ -48,6 +49,9 @@ export default function SwipeScreen() {
   const [deckHeight, setDeckHeight] = useState(0);
   const seenNamesRef = useRef(seenNames);
   const cardIndexRef = useRef(0);
+  const mountTimeRef = useRef(Date.now());
+  const firstCardLoggedRef = useRef(false);
+  const lastSwipeTimeRef = useRef<number | null>(null);
   const addName = useAddName(listId!);
   const { mutate: recordSwipe } = useRecordSwipe();
 
@@ -106,6 +110,7 @@ export default function SwipeScreen() {
       setCardIndex(0);
       setQueue(allNames);
       setCommittedFilterKey(filterKey);
+      logQueueRebuild(filterKey, allNames.length);
     } else {
       // Background refetch — preserve the current card position.
       setQueue((prev) => {
@@ -124,10 +129,20 @@ export default function SwipeScreen() {
     setQueue((prev) => prev.filter((n) => !likedNamesRef.current.has(n.name)));
   }, [likedNames]);
 
+  // Time-to-first-card: log once when the queue first becomes non-empty
+  useEffect(() => {
+    if (queue.length > 0 && !firstCardLoggedRef.current) {
+      firstCardLoggedRef.current = true;
+      logTimeToFirstCard(Date.now() - mountTimeRef.current, queue.length);
+    }
+  }, [queue.length]);
+
   useEffect(() => {
     cardIndexRef.current = cardIndex;
     if (queue.length - cardIndex < 5 && hasNextPage) {
-      fetchNextPage();
+      const tracker = logQueueFetch('low_buffer', cardIndex, queue.length);
+      const prevSize = queue.length;
+      fetchNextPage().then(() => tracker.done(queue.length - prevSize));
     }
   }, [cardIndex, queue.length, hasNextPage]);
 
@@ -136,6 +151,9 @@ export default function SwipeScreen() {
       const name = queue[idx];
       if (!name || !listId || !deviceId) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const now = Date.now();
+      logSwipe('right', name.name, queue.length - idx - 1, lastSwipeTimeRef.current ? now - lastSwipeTimeRef.current : null);
+      lastSwipeTimeRef.current = now;
       addSeen(name.name);
       addName.mutate({ deviceId, name: name.name });
       recordSwipe({ deviceId, name: name.name, liked: true, sex_context: filters.sex });
@@ -148,6 +166,9 @@ export default function SwipeScreen() {
     (idx: number) => {
       const name = queue[idx];
       if (name) {
+        const now = Date.now();
+        logSwipe('left', name.name, queue.length - idx - 1, lastSwipeTimeRef.current ? now - lastSwipeTimeRef.current : null);
+        lastSwipeTimeRef.current = now;
         addSeen(name.name);
         if (deviceId) recordSwipe({ deviceId, name: name.name, liked: false, sex_context: filters.sex });
       }
