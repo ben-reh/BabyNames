@@ -4,7 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NestableDraggableFlatList, NestableScrollContainer, RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
+import { NestableDraggableFlatList, NestableScrollContainer, RenderItemParams } from 'react-native-draggable-flatlist';
 import {
   ActivityIndicator,
   Alert,
@@ -83,16 +83,14 @@ function DraggableNameRow({
   onPress: () => void;
 }) {
   return (
-    <ScaleDecorator activeScale={1.03}>
-      <View style={[styles.nameCard, isActive && styles.nameCardDragging]}>
-        <TouchableOpacity style={styles.nameRow} onPress={onPress} activeOpacity={0.7}>
-          <Text style={styles.nameText}>{name}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPressIn={drag} style={styles.gripArea} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="reorder-three-outline" size={24} color={isActive ? colors.primary : colors.textMuted} />
-        </TouchableOpacity>
-      </View>
-    </ScaleDecorator>
+    <View style={[styles.nameCard, isActive && styles.nameCardDragging]}>
+      <TouchableOpacity style={styles.nameRow} onPress={onPress} activeOpacity={0.7}>
+        <Text style={styles.nameText}>{name}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPressIn={drag} style={styles.gripArea} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <Ionicons name="reorder-three-outline" size={24} color={isActive ? colors.primary : colors.textMuted} />
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -107,7 +105,6 @@ export default function MyListsScreen() {
   const [matchesExpanded, setMatchesExpanded] = useState(false);
   const [passedExpanded, setPassedExpanded] = useState(false);
   const [search, setSearch] = useState('');
-  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem('seen_my_lists').then((val) => {
@@ -272,7 +269,7 @@ export default function MyListsScreen() {
         </View>
 
         {/* Liked section */}
-        <View style={[styles.section, isDragging && { overflow: 'visible' }]}>
+        <View style={[styles.section, { overflow: 'visible' }]}>
           <SectionHeader
             title="Liked"
             count={filteredLiked.length}
@@ -292,8 +289,8 @@ export default function MyListsScreen() {
                   data={filteredLiked}
                   keyExtractor={(name) => name}
                   scrollEnabled={false}
-                  onDragBegin={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setIsDragging(true); }}
-                  onDragEnd={({ data }) => { if (listId) setOrder(listId, data); setIsDragging(false); }}
+                  onDragBegin={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}
+                  onDragEnd={({ data }) => { if (listId) setOrder(listId, data); }}
                   renderItem={({ item: name, drag, isActive }: RenderItemParams<string>) => (
                     <DraggableNameRow
                       name={name}
