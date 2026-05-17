@@ -40,7 +40,7 @@
 - [ ] **Collaborative filtering** — co-like signals once real users exist; highest single-improvement lever
 - [ ] **Multi-vector taste representation** — cluster liked names into 2–3 style groups instead of single average; handles bimodal preferences (user who likes both biblical and nature names)
 - [ ] **Rarity preference detection** — detect from swipe history whether user prefers rare vs. common names; adjust minimum count threshold accordingly
-- [ ] **Partner taste blending** — blend both partners' taste vectors (`0.5 * user + 0.5 * partner`) for ANN query instead of just priority-sorting partner-liked names
+- [x] **Partner taste blending** — blend both partners' taste vectors (`0.5 * user + 0.5 * partner`) for ANN query instead of just priority-sorting partner-liked names
 
 ### Medium priority
 - [ ] **Trend velocity feature** — add 3–5 year popularity slope from RDS `name_popularity` data; distinguishes "peaked 2020, now declining" from "peaked 2020, still rising"
