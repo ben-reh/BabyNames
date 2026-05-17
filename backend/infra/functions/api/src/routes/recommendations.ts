@@ -1,5 +1,7 @@
-import { BatchGetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchGetCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE, ORIGIN_INDEX } from '../db/dynamo';
+
+const LISTS_TABLE = 'Lists';
 import { getPool } from '../db/postgres';
 import { ok, err } from '../utils';
 import { formatName } from './names';
@@ -165,8 +167,25 @@ async function enrichNames(names: string[], rankSex?: string) {
     .filter(Boolean);
 }
 
+async function getPartnerDeviceId(listId: string, deviceId: string): Promise<string | null> {
+  const result = await ddb.send(new GetCommand({ TableName: LISTS_TABLE, Key: { listId } }));
+  const list = result.Item as { partnerA?: { deviceId: string }; partnerB?: { deviceId: string } } | undefined;
+  if (!list) return null;
+  if (list.partnerA?.deviceId === deviceId) return list.partnerB?.deviceId ?? null;
+  if (list.partnerB?.deviceId === deviceId) return list.partnerA?.deviceId ?? null;
+  return null;
+}
+
+function parseVec(pgvecStr: string): number[] {
+  return pgvecStr.slice(1, -1).split(',').map(Number);
+}
+
+function blendVecs(a: number[], b: number[]): string {
+  return `[${a.map((v, i) => 0.5 * v + 0.5 * b[i]).join(',')}]`;
+}
+
 export async function getRecommendations(deviceId: string, params: Params) {
-  const { sex } = params;
+  const { sex, listId } = params;
   const ctx = vSex(sex);
   const filter = sexClause(sex);
   const excl = `AND nv.name NOT IN (SELECT name FROM user_swipes WHERE user_id = $1 AND sex_context = '${ctx}')`;
@@ -182,14 +201,37 @@ export async function getRecommendations(deviceId: string, params: Params) {
   const originArr = originSet ? [...originSet] : null;
   const originSql = (nextIdx: number) => originArr ? ` AND nv.name = ANY($${nextIdx}::text[])` : '';
 
-  const tasteResult = await pool.query<{ embedding: string; liked_count: number }>(
-    `SELECT embedding, liked_count FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}'`,
-    [deviceId],
-  );
+  const [tasteResult, partnerDeviceId] = await Promise.all([
+    pool.query<{ embedding: string; liked_count: number }>(
+      `SELECT embedding, liked_count FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}'`,
+      [deviceId],
+    ),
+    listId ? getPartnerDeviceId(listId, deviceId) : Promise.resolve(null),
+  ]);
+
+  // Resolve query vector: user's taste, optionally blended with partner's
+  let queryVec: string | null = null;
+  if (tasteResult.rows.length > 0) {
+    const userVec = parseVec(tasteResult.rows[0].embedding as unknown as string);
+    if (partnerDeviceId) {
+      const partnerTaste = await pool.query<{ embedding: string }>(
+        `SELECT embedding FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}'`,
+        [partnerDeviceId],
+      );
+      if (partnerTaste.rows.length > 0) {
+        const partnerVec = parseVec(partnerTaste.rows[0].embedding as unknown as string);
+        queryVec = blendVecs(userVec, partnerVec);
+      } else {
+        queryVec = `[${userVec.join(',')}]`;
+      }
+    } else {
+      queryVec = `[${userVec.join(',')}]`;
+    }
+  }
 
   let names: string[];
 
-  if (tasteResult.rows.length > 0) {
+  if (queryVec !== null) {
     const likedCount = tasteResult.rows[0].liked_count ?? 0;
 
     const simWeight = likedCount < 3 ? 0 : Math.min(1, (likedCount - 3) / 7);
@@ -206,9 +248,9 @@ export async function getRecommendations(deviceId: string, params: Params) {
              FROM   name_vectors nv
              JOIN   ${NP_AGG} ON np.name = nv.name
              WHERE  1=1 ${excl} ${filter} ${popFilter}${originSql(3)}
-             ORDER  BY nv.embedding <=> (SELECT embedding FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}')
-             LIMIT  $2`,
-            originArr ? [deviceId, SIMILARITY_POOL, originArr] : [deviceId, SIMILARITY_POOL],
+             ORDER  BY nv.embedding <=> $2::vector
+             LIMIT  $3`,
+            originArr ? [deviceId, queryVec, SIMILARITY_POOL, originArr] : [deviceId, queryVec, SIMILARITY_POOL],
           )
         : Promise.resolve({ rows: [] }),
       pool.query<{ name: string }>(
@@ -216,11 +258,11 @@ export async function getRecommendations(deviceId: string, params: Params) {
          FROM   name_vectors nv
          JOIN   ${NP_AGG} ON np.name = nv.name
          WHERE  1=1 ${excl} ${filter} ${popFilter}
-         AND    np.count >= $2
-         AND    np.count < $3${originSql(5)}
-         ORDER  BY nv.embedding <=> (SELECT embedding FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}')
-         LIMIT  $4`,
-        originArr ? [deviceId, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize, originArr] : [deviceId, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize],
+         AND    np.count >= $3
+         AND    np.count < $4${originSql(6)}
+         ORDER  BY nv.embedding <=> $2::vector
+         LIMIT  $5`,
+        originArr ? [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize, originArr] : [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize],
       ),
       pool.query<{ name: string }>(
         `SELECT nv.name
@@ -233,7 +275,7 @@ export async function getRecommendations(deviceId: string, params: Params) {
       ),
     ]);
 
-    console.log(JSON.stringify({ event: 'rec_queries', duration_ms: Date.now() - tQueries, liked_count: likedCount, sim_weight: simWeight, counts: { similarity: similarityResult.rows.length, exploration: explorationResult.rows.length, popular: popularResult.rows.length } }));
+    console.log(JSON.stringify({ event: 'rec_queries', duration_ms: Date.now() - tQueries, liked_count: likedCount, sim_weight: simWeight, partner_blended: !!partnerDeviceId, counts: { similarity: similarityResult.rows.length, exploration: explorationResult.rows.length, popular: popularResult.rows.length } }));
 
     const pool60 = similarityResult.rows.map((r: { name: string }) => r.name);
     for (let i = pool60.length - 1; i > 0; i--) {

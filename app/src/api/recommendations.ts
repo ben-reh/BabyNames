@@ -4,6 +4,7 @@ import type { Name } from './types';
 
 interface RecommendationsFilters {
   deviceId: string;
+  listId?: string;
   sex?: 'M' | 'F' | 'U';
   origins?: string[];
   popularity?: string[];
@@ -11,9 +12,10 @@ interface RecommendationsFilters {
 
 export function useInfiniteRecommendations(filters: RecommendationsFilters) {
   return useInfiniteQuery({
-    queryKey: ['recommendations', filters.deviceId, filters.sex, filters.origins, filters.popularity],
+    queryKey: ['recommendations', filters.deviceId, filters.listId, filters.sex, filters.origins, filters.popularity],
     queryFn: async () => {
       const params: Record<string, string> = { deviceId: filters.deviceId };
+      if (filters.listId) params.listId = filters.listId;
       if (filters.sex) params.sex = filters.sex;
       if (filters.origins?.length) params.origins = filters.origins.join(',');
       if (filters.popularity?.length) params.popularity = filters.popularity.join(',');

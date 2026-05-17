@@ -85,6 +85,7 @@ export default function SwipeScreen() {
   });
   const recommendationsResult = useInfiniteRecommendations({
     deviceId: deviceId ?? '',
+    listId: listId ?? undefined,
     sex: filters.sex ?? undefined,
     origins: filters.origins,
     popularity: filters.popularity,
