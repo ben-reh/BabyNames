@@ -163,6 +163,8 @@ export default function SwipeScreen() {
       logSwipe('right', name.name, queue.length - idx - 1, lastSwipeTimeRef.current ? now - lastSwipeTimeRef.current : null);
       lastSwipeTimeRef.current = now;
       justSwipedRef.current = name.name;
+      // Update ref immediately so any concurrent queue rebuild uses the correct position
+      cardIndexRef.current = idx + 1;
       addSeen(name.name);
       addName.mutate({ deviceId, name: name.name });
       recordSwipe({ deviceId, name: name.name, liked: true, sex_context: filters.sex });
@@ -178,6 +180,8 @@ export default function SwipeScreen() {
         const now = Date.now();
         logSwipe('left', name.name, queue.length - idx - 1, lastSwipeTimeRef.current ? now - lastSwipeTimeRef.current : null);
         lastSwipeTimeRef.current = now;
+        // Update ref immediately so any concurrent queue rebuild uses the correct position
+        cardIndexRef.current = idx + 1;
         addSeen(name.name);
         if (deviceId) recordSwipe({ deviceId, name: name.name, liked: false, sex_context: filters.sex });
       }
