@@ -22,6 +22,7 @@ export function useInfiniteRecommendations(filters: RecommendationsFilters) {
     },
     initialPageParam: 0,
     getNextPageParam: (_, allPages) => allPages.length,
-    staleTime: 0,
+    staleTime: 5 * 60 * 1000, // 5 min — prevents background refetch on every swipe re-render
+    refetchOnWindowFocus: false, // new pages via fetchNextPage only, not on app focus
   });
 }
