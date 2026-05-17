@@ -22,7 +22,7 @@ import { useJoinList, useList } from '../../src/api/lists';
 import { useNamesBatch } from '../../src/api/names';
 import { useSwipedNames } from '../../src/api/swipe';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
-import { useSessionStore, useListOrderStore } from '../../src/store';
+import { useSessionStore, useListOrderStore, useFilterStore } from '../../src/store';
 
 type SexFilter = 'F' | 'M' | 'U';
 
@@ -97,7 +97,9 @@ function DraggableNameRow({
 export default function MyListsScreen() {
   const router = useRouter();
   const { listId, deviceId, partnerRole, code, setSession, clearSession, defaultSex } = useSessionStore();
-  const [sexFilter, setSexFilter] = useState<SexFilter>(() => (defaultSex === 'F' || defaultSex === 'M' ? defaultSex : 'U'));
+  const { sex: rawSex, setSex } = useFilterStore();
+  const sexFilter: SexFilter = rawSex ?? 'F';
+  const setSexFilter = setSex;
   const { data, isLoading } = useList(listId);
   const { data: passedNames = [] } = useSwipedNames(deviceId, false, sexFilter);
   const { mutate: joinList, isPending: isJoining, error: joinError, reset: resetJoin } = useJoinList();
