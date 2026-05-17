@@ -115,10 +115,11 @@ export default function SwipeScreen() {
       setCommittedFilterKey(filterKey);
       logQueueRebuild(filterKey, allNames.length);
     } else {
-      // Background refetch — preserve the current card position.
+      // New data arrived — preserve the full visible stack so incoming names
+      // never replace cards the Swiper is actively rendering (stackSize = 3).
       setQueue((prev) => {
         const pos = cardIndexRef.current;
-        const preserved = prev.slice(0, pos + 1);
+        const preserved = prev.slice(0, pos + 3); // protect current + 2 stacked cards
         const preservedNames = new Set(preserved.map((n) => n.name));
         const tail = allNames.filter((n) => !preservedNames.has(n.name));
         return [...preserved, ...tail];
