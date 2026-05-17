@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -21,6 +22,16 @@ import { api } from '../../src/api/client';
 import { useJoinList, useList } from '../../src/api/lists';
 import { useNamesBatch } from '../../src/api/names';
 import { useSwipedNames } from '../../src/api/swipe';
+import {
+  PREDEFINED_TAGS,
+  TAG_COLOR_OPTIONS,
+  TagDef,
+  useCreateTag,
+  useDeleteTag,
+  useSetNameTags,
+  useTagAssignments,
+  useTagDefs,
+} from '../../src/api/tags';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 import { useSessionStore, useListOrderStore, useFilterStore } from '../../src/store';
 
@@ -31,6 +42,15 @@ const SEX_OPTIONS: { label: string; value: SexFilter }[] = [
   { label: 'Unisex', value: 'U' },
   { label: '♂ Boy', value: 'M' },
 ];
+
+function TagChip({ tag }: { tag: TagDef }) {
+  return (
+    <View style={[styles.tagChip, { backgroundColor: tag.color + '22' }]}>
+      <View style={[styles.tagDot, { backgroundColor: tag.color }]} />
+      <Text style={[styles.tagChipText, { color: tag.color }]}>{tag.label}</Text>
+    </View>
+  );
+}
 
 function SectionHeader({
   title,
@@ -76,16 +96,38 @@ function DraggableNameRow({
   drag,
   isActive,
   onPress,
+  tags,
+  onTagPress,
 }: {
   name: string;
   drag: () => void;
   isActive: boolean;
   onPress: () => void;
+  tags: TagDef[];
+  onTagPress: () => void;
 }) {
   return (
     <View style={[styles.nameCard, isActive && styles.nameCardDragging]}>
-      <TouchableOpacity style={styles.nameRow} onPress={onPress} activeOpacity={0.7}>
+      <TouchableOpacity style={styles.nameContent} onPress={onPress} activeOpacity={0.7}>
         <Text style={styles.nameText}>{name}</Text>
+        {tags.length > 0 && (
+          <View style={styles.tagChipsRow}>
+            {tags.map((t) => (
+              <TagChip key={t.id} tag={t} />
+            ))}
+          </View>
+        )}
+      </TouchableOpacity>
+      <TouchableOpacity
+        onPress={onTagPress}
+        style={styles.tagButton}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
+        <Ionicons
+          name="pricetag-outline"
+          size={18}
+          color={tags.length > 0 ? colors.primary : colors.textMuted}
+        />
       </TouchableOpacity>
       <TouchableOpacity onPressIn={drag} style={styles.gripArea} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
         <Ionicons name="reorder-three-outline" size={24} color={isActive ? colors.primary : colors.textMuted} />
@@ -107,6 +149,11 @@ export default function MyListsScreen() {
   const [matchesExpanded, setMatchesExpanded] = useState(false);
   const [passedExpanded, setPassedExpanded] = useState(false);
   const [search, setSearch] = useState('');
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [selectedNameForTag, setSelectedNameForTag] = useState<string | null>(null);
+  const [isCreatingTag, setIsCreatingTag] = useState(false);
+  const [newTagLabel, setNewTagLabel] = useState('');
+  const [newTagColor, setNewTagColor] = useState(TAG_COLOR_OPTIONS[0]);
 
   useEffect(() => {
     AsyncStorage.getItem('seen_my_lists').then((val) => {
@@ -119,6 +166,14 @@ export default function MyListsScreen() {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinCode, setJoinCode] = useState('');
   const joinInputRef = useRef<TextInput>(null);
+
+  // Tag data
+  const { data: customTagDefs = [] } = useTagDefs(deviceId);
+  const { data: tagAssignments = {} } = useTagAssignments(deviceId);
+  const { mutate: createTag } = useCreateTag(deviceId);
+  const { mutate: deleteTag } = useDeleteTag(deviceId);
+  const { mutate: setNameTags } = useSetNameTags(deviceId);
+  const allTagDefs = useMemo(() => [...PREDEFINED_TAGS, ...customTagDefs], [customTagDefs]);
 
   const myNames = partnerRole === 'A' ? data?.partnerA?.names ?? [] : data?.partnerB?.names ?? [];
   const matches = data?.matches ?? [];
@@ -156,10 +211,50 @@ export default function MyListsScreen() {
     const inOrder = new Set(ordered);
     return [...ordered, ...baseLiked.filter((n) => !inOrder.has(n))];
   }, [baseLiked, storedOrder]);
-  const filteredLiked = orderedLiked.filter(matchSearch);
+
+  const filteredLiked = orderedLiked
+    .filter(matchSearch)
+    .filter((n) => !tagFilter || (tagAssignments[n] ?? []).includes(tagFilter));
 
   const filteredMatches = applyFilter(matches).filter(matchSearch);
   const filteredPassed = passedNames.filter(matchSearch);
+
+  // Tags that have at least one assignment among liked names (for the filter row)
+  const tagsInUse = useMemo(
+    () => allTagDefs.filter((tag) => baseLiked.some((n) => (tagAssignments[n] ?? []).includes(tag.id))),
+    [allTagDefs, baseLiked, tagAssignments],
+  );
+
+  function getNameTags(name: string): TagDef[] {
+    const ids = tagAssignments[name] ?? [];
+    return ids.flatMap((id) => allTagDefs.find((t) => t.id === id) ?? []);
+  }
+
+  function toggleTag(name: string, tagId: string) {
+    const current = tagAssignments[name] ?? [];
+    const newTagIds = current.includes(tagId) ? current.filter((t) => t !== tagId) : [...current, tagId];
+    setNameTags({ name, tagIds: newTagIds });
+  }
+
+  function openCreateTag() {
+    setNewTagLabel('');
+    setNewTagColor(TAG_COLOR_OPTIONS[0]);
+    setIsCreatingTag(true);
+  }
+
+  function submitCreateTag() {
+    if (!newTagLabel.trim()) return;
+    createTag({ label: newTagLabel.trim(), color: newTagColor });
+    setIsCreatingTag(false);
+    setNewTagLabel('');
+  }
+
+  function handleDeleteTag(tagId: string) {
+    Alert.alert('Delete tag?', 'This will remove the tag from all names.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => deleteTag(tagId) },
+    ]);
+  }
 
   const openJoinModal = () => {
     resetJoin();
@@ -244,7 +339,7 @@ export default function MyListsScreen() {
               <TouchableOpacity
                 key={opt.value}
                 style={[styles.segment, sexFilter === opt.value && styles.segmentActive]}
-                onPress={() => setSexFilter(opt.value)}
+                onPress={() => { setSexFilter(opt.value); setTagFilter(null); }}
               >
                 <Text style={[styles.segmentText, sexFilter === opt.value && styles.segmentTextActive]}>
                   {opt.label}
@@ -269,6 +364,37 @@ export default function MyListsScreen() {
             />
           </View>
         </View>
+
+        {tagsInUse.length > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.filterRow}
+            contentContainerStyle={styles.filterRowContent}
+          >
+            <TouchableOpacity
+              style={[styles.filterChip, !tagFilter && styles.filterChipActive]}
+              onPress={() => setTagFilter(null)}
+            >
+              <Text style={[styles.filterChipText, !tagFilter && styles.filterChipTextActive]}>All</Text>
+            </TouchableOpacity>
+            {tagsInUse.map((tag) => (
+              <TouchableOpacity
+                key={tag.id}
+                style={[
+                  styles.filterChip,
+                  tagFilter === tag.id && { backgroundColor: tag.color + '22', borderColor: tag.color },
+                ]}
+                onPress={() => setTagFilter((v) => (v === tag.id ? null : tag.id))}
+              >
+                <View style={[styles.tagDot, { backgroundColor: tag.color }]} />
+                <Text style={[styles.filterChipText, tagFilter === tag.id && { color: tag.color }]}>
+                  {tag.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
 
         {/* Liked section */}
         <View style={[styles.section, { overflow: 'visible' }]}>
@@ -299,6 +425,8 @@ export default function MyListsScreen() {
                       drag={drag}
                       isActive={isActive}
                       onPress={() => router.push(`/name/${name}`)}
+                      tags={getNameTags(name)}
+                      onTagPress={() => setSelectedNameForTag(name)}
                     />
                   )}
                 />
@@ -399,6 +527,112 @@ export default function MyListsScreen() {
         </View>
       </NestableScrollContainer>
 
+      {/* Tag picker sheet */}
+      {selectedNameForTag && (
+        <Modal
+          visible
+          transparent
+          animationType="slide"
+          onRequestClose={() => { setSelectedNameForTag(null); setIsCreatingTag(false); }}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.modalOverlay}
+          >
+            <TouchableOpacity
+              style={styles.modalBackdrop}
+              activeOpacity={1}
+              onPress={() => { setSelectedNameForTag(null); setIsCreatingTag(false); }}
+            />
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHandle} />
+              <Text style={styles.modalTitle}>Tag "{selectedNameForTag}"</Text>
+
+              <ScrollView style={styles.tagPickerList} showsVerticalScrollIndicator={false}>
+                {allTagDefs.map((tag) => {
+                  const isAssigned = (tagAssignments[selectedNameForTag] ?? []).includes(tag.id);
+                  const isCustom = !PREDEFINED_TAGS.find((p) => p.id === tag.id);
+                  return (
+                    <TouchableOpacity
+                      key={tag.id}
+                      style={styles.tagPickerRow}
+                      onPress={() => toggleTag(selectedNameForTag, tag.id)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.tagDot, styles.tagDotLg, { backgroundColor: tag.color }]} />
+                      <Text style={styles.tagPickerLabel}>{tag.label}</Text>
+                      <View style={styles.tagPickerSpacer} />
+                      {isCustom && (
+                        <TouchableOpacity
+                          onPress={() => handleDeleteTag(tag.id)}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <Ionicons name="close-circle-outline" size={20} color={colors.textMuted} />
+                        </TouchableOpacity>
+                      )}
+                      {isAssigned && (
+                        <Ionicons
+                          name="checkmark"
+                          size={20}
+                          color={colors.primary}
+                          style={isCustom ? styles.checkmarkWithDelete : undefined}
+                        />
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+
+                {isCreatingTag ? (
+                  <View style={styles.createTagForm}>
+                    <TextInput
+                      style={styles.createTagInput}
+                      value={newTagLabel}
+                      onChangeText={setNewTagLabel}
+                      placeholder="Tag name"
+                      placeholderTextColor={colors.textMuted}
+                      autoFocus
+                      autoCorrect={false}
+                      maxLength={24}
+                      onSubmitEditing={submitCreateTag}
+                      returnKeyType="done"
+                    />
+                    <View style={styles.colorSwatchRow}>
+                      {TAG_COLOR_OPTIONS.map((c) => (
+                        <TouchableOpacity key={c} onPress={() => setNewTagColor(c)} activeOpacity={0.8}>
+                          <View style={[styles.colorSwatch, { backgroundColor: c }, newTagColor === c && styles.colorSwatchSelected]} />
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <View style={styles.createTagActions}>
+                      <TouchableOpacity onPress={() => setIsCreatingTag(false)} style={styles.createTagCancel}>
+                        <Text style={styles.createTagCancelText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={submitCreateTag}
+                        style={[styles.createTagSubmit, !newTagLabel.trim() && styles.createTagSubmitDisabled]}
+                        disabled={!newTagLabel.trim()}
+                      >
+                        <Text style={styles.createTagSubmitText}>Add</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : (
+                  <TouchableOpacity style={styles.addTagRow} onPress={openCreateTag} activeOpacity={0.7}>
+                    <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
+                    <Text style={styles.addTagText}>Create new tag</Text>
+                  </TouchableOpacity>
+                )}
+              </ScrollView>
+
+              <TouchableOpacity style={styles.doneBtn} onPress={() => { setSelectedNameForTag(null); setIsCreatingTag(false); }}>
+                <Text style={styles.doneBtnText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
+      )}
+
+      {/* Join partner modal */}
       <Modal
         visible={showJoinModal}
         transparent
@@ -492,6 +726,27 @@ const styles = StyleSheet.create({
   },
   searchIcon: { marginRight: spacing.sm },
   searchInput: { flex: 1, height: 44, fontSize: fontSize.md, color: colors.text },
+  filterRow: { marginBottom: spacing.md },
+  filterRowContent: {
+    paddingHorizontal: spacing.lg,
+    gap: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  filterChipActive: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
+  filterChipText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textMuted },
+  filterChipTextActive: { color: colors.primary },
   section: {
     marginHorizontal: spacing.lg,
     marginBottom: spacing.md,
@@ -541,10 +796,23 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 8,
   },
-  dropIndicator: { height: 3, backgroundColor: colors.primary, borderRadius: 2, marginHorizontal: spacing.sm, marginVertical: 1 },
   matchCard: { borderWidth: 1.5, borderColor: colors.match + '60' },
+  nameContent: { flex: 1, gap: spacing.xs },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1 },
   nameText: { fontSize: fontSize.md, fontWeight: '600', color: colors.text },
+  tagChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  tagChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.full,
+  },
+  tagDot: { width: 6, height: 6, borderRadius: 3 },
+  tagDotLg: { width: 10, height: 10, borderRadius: 5 },
+  tagChipText: { fontSize: fontSize.xs, fontWeight: '600' },
+  tagButton: { padding: 8 },
   gripArea: { padding: 12 },
   matchEmoji: { fontSize: 18 },
   waitingSection: { paddingHorizontal: spacing.md, paddingBottom: spacing.md, alignItems: 'center', gap: spacing.md },
@@ -581,6 +849,35 @@ const styles = StyleSheet.create({
   modalHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: spacing.sm },
   modalTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
   modalSubtitle: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center' },
+  tagPickerList: { width: '100%', maxHeight: 320 },
+  tagPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+    gap: spacing.md,
+  },
+  tagPickerLabel: { fontSize: fontSize.md, color: colors.text, fontWeight: '500' },
+  tagPickerSpacer: { flex: 1 },
+  checkmarkWithDelete: { marginLeft: spacing.sm },
+  addTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+  addTagText: { fontSize: fontSize.md, color: colors.primary, fontWeight: '600' },
+  doneBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    alignItems: 'center',
+    width: '100%',
+    marginTop: spacing.sm,
+  },
+  doneBtnText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
   codeInput: {
     fontSize: 36,
     fontWeight: '900',
@@ -607,4 +904,29 @@ const styles = StyleSheet.create({
   joinBtnText: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
   cancelBtn: { paddingVertical: spacing.sm },
   cancelBtnText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '600' },
+  createTagForm: { paddingTop: spacing.md, gap: spacing.md },
+  createTagInput: {
+    fontSize: fontSize.md,
+    color: colors.text,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.background,
+  },
+  colorSwatchRow: { flexDirection: 'row', gap: spacing.md, justifyContent: 'center' },
+  colorSwatch: { width: 32, height: 32, borderRadius: 16 },
+  colorSwatchSelected: { borderWidth: 3, borderColor: colors.text },
+  createTagActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.md, alignItems: 'center' },
+  createTagCancel: { paddingVertical: spacing.sm, paddingHorizontal: spacing.sm },
+  createTagCancelText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '600' },
+  createTagSubmit: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  createTagSubmitDisabled: { opacity: 0.4 },
+  createTagSubmitText: { color: '#fff', fontSize: fontSize.sm, fontWeight: '700' },
 });

@@ -3,6 +3,7 @@ import { getBatchNames, getNames, getName, getRankings, searchNames } from './ro
 import { getNameRank, getPopularity } from './routes/popularity';
 import { createList, joinList, getList, addName, removeName } from './routes/lists';
 import { getRecommendations, getUserSwipes, recordSwipe } from './routes/recommendations';
+import { listTagDefs, listTagAssignments, createTag, deleteTag, setNameTags } from './routes/tags';
 import { err } from './utils';
 
 type Params = Record<string, string | undefined>;
@@ -71,6 +72,11 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return respond(await getNameRank(decodeURIComponent(rankMatch[1]), params));
     }
 
+    const nameTagsMatch = path.match(/^\/names\/([^/]+)\/tags$/);
+    if (method === 'PUT' && nameTagsMatch) {
+      return respond(await setNameTags(decodeURIComponent(nameTagsMatch[1]), parseBody(event)));
+    }
+
     const nameMatch = path.match(/^\/names\/([^/]+)$/);
     if (method === 'GET' && nameMatch) {
       return respond(await getName(decodeURIComponent(nameMatch[1])));
@@ -78,6 +84,24 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     if (method === 'GET' && path === '/names') {
       return respond(await getNames(params));
+    }
+
+    // --- Tags routes ---
+    if (method === 'GET' && path === '/tags') {
+      return respond(await listTagDefs(params));
+    }
+
+    if (method === 'GET' && path === '/tags/assignments') {
+      return respond(await listTagAssignments(params));
+    }
+
+    if (method === 'POST' && path === '/tags') {
+      return respond(await createTag(parseBody(event)));
+    }
+
+    const tagIdMatch = path.match(/^\/tags\/([^/]+)$/);
+    if (method === 'DELETE' && tagIdMatch) {
+      return respond(await deleteTag(decodeURIComponent(tagIdMatch[1]), params));
     }
 
     // --- Lists routes ---

@@ -23,8 +23,8 @@
 - [ ] Name meaning in details card
 
 ### Name tags
-- [ ] User-defined tags on liked names (e.g. "top pick", "maybe", "love the sound", "too popular")
-- [ ] Filter and sort My Lists by tag
+- [x] User-defined tags on liked names ("Favorite", "Family Name", "Middle Name" + custom)
+- [x] Filter My Lists by tag
 - [ ] Partner can see each other's tags to understand why a name was liked
 
 ### AI chat feature & list generator

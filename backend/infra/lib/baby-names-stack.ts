@@ -96,6 +96,15 @@ export class BabyNamesStack extends cdk.Stack {
       deletionProtection: false,
     });
 
+    // --- DynamoDB: name tags (definitions + assignments, per deviceId) ---
+    const nameTagsTable = new dynamodb.Table(this, 'NameTagsTable', {
+      tableName: 'NameTags',
+      partitionKey: { name: 'deviceId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     // --- Lambda: API handler ---
     const apiFunction = new NodejsFunction(this, 'ApiFunction', {
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -112,6 +121,7 @@ export class BabyNamesStack extends cdk.Stack {
         DB_NAME: 'babynames',
         DB_USER: 'babynames',
         DB_PASSWORD: dbSecret.secretValueFromJson('password').unsafeUnwrap(),
+        TAGS_TABLE: nameTagsTable.tableName,
       },
       bundling: {
         externalModules: [],
@@ -141,6 +151,11 @@ export class BabyNamesStack extends cdk.Stack {
     apiFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ['dynamodb:PutItem', 'dynamodb:GetItem', 'dynamodb:UpdateItem', 'dynamodb:Query'],
       resources: [listsTable.tableArn, `${listsTable.tableArn}/index/*`],
+    }));
+
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:PutItem', 'dynamodb:GetItem', 'dynamodb:DeleteItem', 'dynamodb:Query'],
+      resources: [nameTagsTable.tableArn],
     }));
 
     // --- Lambda: AI chat handler (outside VPC — needs internet for Bedrock) ---
@@ -177,7 +192,7 @@ export class BabyNamesStack extends cdk.Stack {
       restApiName: 'BabyNamesApi',
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
-        allowMethods: ['GET', 'POST', 'DELETE'],
+        allowMethods: ['GET', 'POST', 'DELETE', 'PUT'],
       },
     });
 
@@ -193,12 +208,21 @@ export class BabyNamesStack extends cdk.Stack {
     nameParam.addMethod('GET', integration);
     nameParam.addResource('popularity').addMethod('GET', integration);
     nameParam.addResource('rank').addMethod('GET', integration);
+    const nameTags = nameParam.addResource('tags');
+    nameTags.addMethod('PUT', integration);
 
     // /recommendations + /swipe routes
     api.root.addResource('recommendations').addMethod('GET', integration);
     api.root.addResource('swipe').addMethod('POST', integration);
     api.root.addResource('swipes').addMethod('GET', integration);
 
+
+    // /tags routes
+    const tags = api.root.addResource('tags');
+    tags.addMethod('GET', integration);
+    tags.addMethod('POST', integration);
+    tags.addResource('assignments').addMethod('GET', integration);
+    tags.addResource('{tagId}').addMethod('DELETE', integration);
 
     // /ai routes
     const aiIntegration = new apigateway.LambdaIntegration(aiFunction);
