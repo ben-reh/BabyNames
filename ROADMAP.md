@@ -12,30 +12,25 @@
 - [x] Name style quiz to seed initial taste vector (5 forced-choice pairs across 10 style clusters)
 - [x] Favorite names import (search, paste from Notes/clipboard, or free-text entry)
 - [x] How it works explainer
-- [ ] Popularity preferences in onboarding
+- [x] Popularity preferences in onboarding
 - [ ] Name style quiz improvements (more pairs, better cluster coverage)
 
 ### Swipe card improvements
 - [x] 2025 SSA rank
 - [x] Origin / meaning (origin shown; meaning not in data model)
-- [ ] Famous namesakes
+- [x] Name gender split for 2025
 - [ ] Sibling name compatibility indicator
-- [ ] Name gender split for 2025 
+- [ ] Name meaning in details card
 
 ### Name tags
 - [ ] User-defined tags on liked names (e.g. "top pick", "maybe", "love the sound", "too popular")
 - [ ] Filter and sort My Lists by tag
 - [ ] Partner can see each other's tags to understand why a name was liked
 
-### AI chat feature
-- [ ] Natural language name exploration ("find me something like Clementine but shorter")
+### AI chat feature & list generator
+- [ ] Natural language name exploration for list generation("find me something like Clementine but shorter")
 - [ ] Answer questions about a name (meaning, history, pronunciation)
-- [ ] Help resolve disagreements between partners
-
-### AI list generator
-- [ ] Generate a starter list from a style description ("Southern, vintage, one syllable")
-- [ ] Import from external sources (family names, inspiration lists)
-- [ ] Export / share lists
+- [ ] Analysis of names the user has liked and suggestions based on patterns
 
 ---
 
