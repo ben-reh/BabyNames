@@ -21,6 +21,7 @@
 - [x] Name gender split for 2025
 - [ ] Sibling name compatibility indicator
 - [ ] Name meaning in details card
+- [ ] Name prevalence (likely hood of another in the class) 
 
 ### Name tags
 - [x] User-defined tags on liked names ("Favorite", "Family Name", "Middle Name" + custom)
