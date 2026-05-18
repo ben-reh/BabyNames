@@ -234,6 +234,7 @@ export class BabyNamesStack extends cdk.Stack {
     lists.addResource('join').addMethod('POST', integration);
     const listParam = lists.addResource('{listId}');
     listParam.addMethod('GET', integration);
+    listParam.addResource('partner-tags').addMethod('GET', integration);
     const listNames = listParam.addResource('names');
     listNames.addMethod('POST', integration);
     listNames.addResource('{name}').addMethod('DELETE', integration);

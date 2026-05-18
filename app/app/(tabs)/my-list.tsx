@@ -28,6 +28,7 @@ import {
   TagDef,
   useCreateTag,
   useDeleteTag,
+  usePartnerTags,
   useSetNameTags,
   useTagAssignments,
   useTagDefs,
@@ -48,6 +49,15 @@ function TagChip({ tag }: { tag: TagDef }) {
     <View style={[styles.tagChip, { backgroundColor: tag.color + '22' }]}>
       <View style={[styles.tagDot, { backgroundColor: tag.color }]} />
       <Text style={[styles.tagChipText, { color: tag.color }]}>{tag.label}</Text>
+    </View>
+  );
+}
+
+function PartnerTagChip({ tag }: { tag: TagDef }) {
+  return (
+    <View style={[styles.tagChip, { borderWidth: 1.5, borderColor: tag.color + '99', backgroundColor: 'transparent' }]}>
+      <View style={[styles.tagDot, { backgroundColor: tag.color + '99' }]} />
+      <Text style={[styles.tagChipText, { color: tag.color + '99' }]}>{tag.label}</Text>
     </View>
   );
 }
@@ -97,6 +107,7 @@ function DraggableNameRow({
   isActive,
   onPress,
   tags,
+  partnerTags,
   onTagPress,
 }: {
   name: string;
@@ -104,17 +115,17 @@ function DraggableNameRow({
   isActive: boolean;
   onPress: () => void;
   tags: TagDef[];
+  partnerTags: TagDef[];
   onTagPress: () => void;
 }) {
   return (
     <View style={[styles.nameCard, isActive && styles.nameCardDragging]}>
       <TouchableOpacity style={styles.nameContent} onPress={onPress} activeOpacity={0.7}>
         <Text style={styles.nameText}>{name}</Text>
-        {tags.length > 0 && (
+        {(tags.length > 0 || partnerTags.length > 0) && (
           <View style={styles.tagChipsRow}>
-            {tags.map((t) => (
-              <TagChip key={t.id} tag={t} />
-            ))}
+            {tags.map((t) => <TagChip key={t.id} tag={t} />)}
+            {partnerTags.map((t) => <PartnerTagChip key={`p-${t.id}`} tag={t} />)}
           </View>
         )}
       </TouchableOpacity>
@@ -175,6 +186,13 @@ export default function MyListsScreen() {
   const { mutate: setNameTags } = useSetNameTags(deviceId);
   const allTagDefs = useMemo(() => [...PREDEFINED_TAGS, ...customTagDefs], [customTagDefs]);
 
+  const { data: partnerTagData } = usePartnerTags(listId, deviceId);
+  const partnerTagAssignments = partnerTagData?.assignments ?? {};
+  const partnerAllTagDefs = useMemo(
+    () => [...PREDEFINED_TAGS, ...(partnerTagData?.customDefs ?? [])],
+    [partnerTagData],
+  );
+
   const myNames = partnerRole === 'A' ? data?.partnerA?.names ?? [] : data?.partnerB?.names ?? [];
   const matches = data?.matches ?? [];
   const partnerJoined = data?.partnerCount === 2;
@@ -228,6 +246,11 @@ export default function MyListsScreen() {
   function getNameTags(name: string): TagDef[] {
     const ids = tagAssignments[name] ?? [];
     return ids.flatMap((id) => allTagDefs.find((t) => t.id === id) ?? []);
+  }
+
+  function getPartnerNameTags(name: string): TagDef[] {
+    const ids = partnerTagAssignments[name] ?? [];
+    return ids.flatMap((id) => partnerAllTagDefs.find((t) => t.id === id) ?? []);
   }
 
   function toggleTag(name: string, tagId: string) {
@@ -426,6 +449,7 @@ export default function MyListsScreen() {
                       isActive={isActive}
                       onPress={() => router.push(`/name/${name}`)}
                       tags={getNameTags(name)}
+                      partnerTags={getPartnerNameTags(name)}
                       onTagPress={() => setSelectedNameForTag(name)}
                     />
                   )}
@@ -480,18 +504,28 @@ export default function MyListsScreen() {
               </View>
             ) : (
               <View style={styles.sectionList}>
-                {filteredMatches.map((name) => (
-                  <TouchableOpacity
-                    key={name}
-                    style={[styles.nameCard, styles.matchCard]}
-                    onPress={() => router.push(`/name/${name}`)}
-                  >
-                    <View style={styles.nameRow}>
-                      <Text style={styles.nameText}>{name}</Text>
-                    </View>
-                    <Text style={styles.matchEmoji}>✨</Text>
-                  </TouchableOpacity>
-                ))}
+                {filteredMatches.map((name) => {
+                  const myTags = getNameTags(name);
+                  const theirTags = getPartnerNameTags(name);
+                  return (
+                    <TouchableOpacity
+                      key={name}
+                      style={[styles.nameCard, styles.matchCard]}
+                      onPress={() => router.push(`/name/${name}`)}
+                    >
+                      <View style={styles.nameContent}>
+                        <Text style={styles.nameText}>{name}</Text>
+                        {(myTags.length > 0 || theirTags.length > 0) && (
+                          <View style={styles.tagChipsRow}>
+                            {myTags.map((t) => <TagChip key={t.id} tag={t} />)}
+                            {theirTags.map((t) => <PartnerTagChip key={`p-${t.id}`} tag={t} />)}
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.matchEmoji}>✨</Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             )
           )}

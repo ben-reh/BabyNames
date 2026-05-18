@@ -65,6 +65,21 @@ export function useDeleteTag(deviceId: string | null) {
   });
 }
 
+export function usePartnerTags(listId: string | null, deviceId: string | null) {
+  return useQuery({
+    queryKey: ['partner-tags', listId, deviceId],
+    queryFn: async () => {
+      const { data } = await api.get<{ customDefs: TagDef[]; assignments: Record<string, string[]> }>(
+        `/lists/${listId}/partner-tags`,
+        { params: { deviceId } },
+      );
+      return data;
+    },
+    enabled: !!listId && !!deviceId,
+    staleTime: 30 * 1000,
+  });
+}
+
 export function useSetNameTags(deviceId: string | null) {
   const qc = useQueryClient();
   return useMutation({

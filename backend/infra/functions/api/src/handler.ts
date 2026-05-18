@@ -3,7 +3,7 @@ import { getBatchNames, getNames, getName, getRankings, searchNames } from './ro
 import { getNameRank, getPopularity } from './routes/popularity';
 import { createList, joinList, getList, addName, removeName } from './routes/lists';
 import { getRecommendations, getUserSwipes, recordSwipe } from './routes/recommendations';
-import { listTagDefs, listTagAssignments, createTag, deleteTag, setNameTags } from './routes/tags';
+import { listTagDefs, listTagAssignments, createTag, deleteTag, setNameTags, getPartnerTags } from './routes/tags';
 import { err } from './utils';
 
 type Params = Record<string, string | undefined>;
@@ -102,6 +102,11 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const tagIdMatch = path.match(/^\/tags\/([^/]+)$/);
     if (method === 'DELETE' && tagIdMatch) {
       return respond(await deleteTag(decodeURIComponent(tagIdMatch[1]), params));
+    }
+
+    const partnerTagsMatch = path.match(/^\/lists\/([^/]+)\/partner-tags$/);
+    if (method === 'GET' && partnerTagsMatch) {
+      return respond(await getPartnerTags(decodeURIComponent(partnerTagsMatch[1]), params));
     }
 
     // --- Lists routes ---

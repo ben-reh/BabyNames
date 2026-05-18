@@ -25,7 +25,7 @@
 ### Name tags
 - [x] User-defined tags on liked names ("Favorite", "Family Name", "Middle Name" + custom)
 - [x] Filter My Lists by tag
-- [ ] Partner can see each other's tags to understand why a name was liked
+- [x] Partner can see each other's tags to understand why a name was liked
 
 ### AI chat feature & list generator
 - [ ] Natural language name exploration for list generation("find me something like Clementine but shorter")

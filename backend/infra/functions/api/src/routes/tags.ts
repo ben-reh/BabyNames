@@ -1,7 +1,9 @@
-import { DeleteCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'crypto';
 import { ddb } from '../db/dynamo';
 import { err, ok } from '../utils';
+
+const LISTS_TABLE = 'Lists';
 
 const TAGS_TABLE = process.env.TAGS_TABLE!;
 
@@ -126,4 +128,53 @@ export async function setNameTags(name: string, body: unknown) {
   }
 
   return ok({ ok: true });
+}
+
+export async function getPartnerTags(listId: string, params: Params) {
+  const { deviceId } = params;
+  if (!deviceId) return err(400, 'deviceId is required');
+
+  const listResult = await ddb.send(new GetCommand({ TableName: LISTS_TABLE, Key: { listId } }));
+  const item = listResult.Item;
+  if (!item) return err(404, 'List not found');
+
+  const partnerDeviceId =
+    item.partnerA?.deviceId === deviceId ? item.partnerB?.deviceId :
+    item.partnerB?.deviceId === deviceId ? item.partnerA?.deviceId :
+    null;
+
+  if (!partnerDeviceId) return err(403, 'Device is not a partner in this list');
+  if (!item.partnerB) return ok({ customDefs: [], assignments: {} });
+
+  const [defsResult, assignsResult] = await Promise.all([
+    ddb.send(new QueryCommand({
+      TableName: TAGS_TABLE,
+      KeyConditionExpression: 'deviceId = :d AND begins_with(sk, :prefix)',
+      ExpressionAttributeValues: { ':d': partnerDeviceId, ':prefix': 'DEF#' },
+    })),
+    ddb.send(new QueryCommand({
+      TableName: TAGS_TABLE,
+      KeyConditionExpression: 'deviceId = :d AND begins_with(sk, :prefix)',
+      ExpressionAttributeValues: { ':d': partnerDeviceId, ':prefix': 'ASSIGN#' },
+    })),
+  ]);
+
+  const customDefs = (defsResult.Items ?? []).map(i => ({
+    id: i.tagId as string,
+    label: i.label as string,
+    color: i.color as string,
+  }));
+
+  const assignments: Record<string, string[]> = {};
+  for (const i of assignsResult.Items ?? []) {
+    const sk = i.sk as string;
+    const withoutPrefix = sk.slice('ASSIGN#'.length);
+    const lastHash = withoutPrefix.lastIndexOf('#');
+    const name = withoutPrefix.slice(0, lastHash);
+    const tagId = withoutPrefix.slice(lastHash + 1);
+    if (!assignments[name]) assignments[name] = [];
+    assignments[name].push(tagId);
+  }
+
+  return ok({ customDefs, assignments });
 }
