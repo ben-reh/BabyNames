@@ -22,6 +22,7 @@
 - [ ] Sibling name compatibility indicator
 - [ ] Name meaning in details card
 - [ ] Name prevalence (likely hood of another in the class) 
+- [ ] similar names: 1) vibe 2) sounds like
 
 ### Name tags
 - [x] User-defined tags on liked names ("Favorite", "Family Name", "Middle Name" + custom)
