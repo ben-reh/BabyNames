@@ -13,6 +13,7 @@ export function formatName(item: Record<string, unknown>) {
     sex: item.sex,
     rank: item.rank ? Number(item.rank) : null,
     origin: item.origin || null,
+    meaning: item.meaning || null,
     year_peak: item.year_peak ? Number(item.year_peak) : null,
     total_count: item.total_count ? Number(item.total_count) : null,
     female_pct: item.female_pct ? Number(item.female_pct) : null,
@@ -268,7 +269,7 @@ export async function getRankings(params: Params) {
   );
 
   return ok({
-    rankings: rows.map((r) => ({ name: r.name, count: Number(r.count), rank: Number(r.rank) })),
+    rankings: rows.map((r: { name: string; count: string | number; rank: string | number }) => ({ name: r.name, count: Number(r.count), rank: Number(r.rank) })),
     offset: offset + rows.length,
     hasMore: rows.length === limit,
   });

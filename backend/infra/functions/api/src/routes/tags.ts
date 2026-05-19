@@ -138,13 +138,12 @@ export async function getPartnerTags(listId: string, params: Params) {
   const item = listResult.Item;
   if (!item) return err(404, 'List not found');
 
-  const partnerDeviceId =
-    item.partnerA?.deviceId === deviceId ? item.partnerB?.deviceId :
-    item.partnerB?.deviceId === deviceId ? item.partnerA?.deviceId :
-    null;
-
-  if (!partnerDeviceId) return err(403, 'Device is not a partner in this list');
+  const isPartnerA = item.partnerA?.deviceId === deviceId;
+  const isPartnerB = item.partnerB?.deviceId === deviceId;
+  if (!isPartnerA && !isPartnerB) return err(403, 'Device is not a partner in this list');
   if (!item.partnerB) return ok({ customDefs: [], assignments: {} });
+
+  const partnerDeviceId = isPartnerA ? item.partnerB.deviceId : item.partnerA?.deviceId;
 
   const [defsResult, assignsResult] = await Promise.all([
     ddb.send(new QueryCommand({
