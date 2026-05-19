@@ -19,10 +19,10 @@
 - [x] 2025 SSA rank
 - [x] Origin / meaning (origin shown; meaning not in data model)
 - [x] Name gender split for 2025
-- [ ] Sibling name compatibility indicator
-- [ ] Name meaning in details card
-- [ ] Name prevalence (likely hood of another in the class) 
-- [ ] similar names: 1) vibe 2) sounds like
+- [ ] P1 Sibling name compatibility indicator
+- [X] Name meaning in details card
+- [ ] P1 Name prevalence (likely hood of another in the class) 
+- [ ] P1 Similar names: 1) vibe 2) sounds like
 
 ### Name tags
 - [x] User-defined tags on liked names ("Favorite", "Family Name", "Middle Name" + custom)
