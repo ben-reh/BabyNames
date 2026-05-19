@@ -2,3 +2,5 @@
 .DS_Store
 .claude/
 package-lock.json
+__pycache__/
+*.pyc

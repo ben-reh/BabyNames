@@ -7,19 +7,19 @@ Run after parse_origins.py.
 Requires: pip install openai
 Set OPENAI_API_KEY in your environment before running.
 
-Tuning: increase EMBEDDING_SCALE to weight cultural vibe over phonetic similarity.
-Run eval_recommendations.py to find the right value before uploading to RDS.
+Tuning: EMBEDDING_SCALE=1 + eval scale=5 gives 5x effective embedding weight.
+Run eval_recommendations.py at scales 1-5 to find the right value before uploading to RDS.
 
-Vector layout (52 + 512*EMBEDDING_SCALE effective dims = 564 total):
-  [0:33]   origin one-hot (32 origins + 1 unknown)
-  [33]     year_peak normalized (1880=0, 2025=1)
-  [34]     syllables normalized (1=0, 5+=1)
-  [35:46]  stress pattern one-hot (10 patterns + 1 unknown)
-  [46]     vowel ratio
-  [47]     phoneme length normalized
-  [48:51]  gender × 3 dims (F=0, unisex=0.5, M=1) — repeated to give more cosine weight
-  [51]     popularity tier — log-normalized 2025 SSA count (groups popular with popular)
-  [52:564] OpenAI text-embedding-3-small * EMBEDDING_SCALE — cultural/vibe signal
+Vector layout (55 HC dims + 512 embedding dims = 567 total):
+  [0:36]   origin one-hot (35 origins + 1 unknown) — includes 'Nature', 'American', 'Celestial'
+  [36]     year_peak normalized (1880=0, 2025=1)
+  [37]     syllables normalized (1=0, 5+=1)
+  [38:49]  stress pattern one-hot (10 patterns + 1 unknown)
+  [49]     vowel ratio
+  [50]     phoneme length normalized
+  [51:54]  gender × 3 dims (F=0, unisex=0.5, M=1) — repeated to give more cosine weight
+  [54]     popularity tier — log-normalized 2025 SSA count (groups popular with popular)
+  [55:567] OpenAI text-embedding-3-small * EMBEDDING_SCALE — cultural/vibe signal
   Note: start/end sound category removed — caused phonetic over-clustering by first/last sound
 """
 import csv
@@ -35,7 +35,8 @@ TOP_N = 15000
 YEAR_MIN, YEAR_MAX = 1880, 2025
 EMBEDDING_DIMS = 512
 EMBED_BATCH_SIZE = 500
-EMBEDDING_SCALE = 5.0  # tuned via eval_recommendations.py — best avg score at scale 5x
+EMBEDDING_SCALE = 1.0  # stored at 1x; eval scripts apply additional scale (default 5x) → 5x effective total
+ORIGIN_SCALE = 2.0    # origin one-hot dims stored at 2.0 to give cultural clustering more cosine weight
 POP_MAX_LOG = math.log1p(50000)  # log(1 + 50k births) — practical ceiling for popularity normalization
 
 ORIGINS = [
@@ -44,8 +45,9 @@ ORIGINS = [
     'Scandinavian', 'Dutch', 'Celtic', 'Irish', 'Welsh', 'Slavic',
     'Russian', 'Italian', 'Spanish', 'Sanskrit/Hindi', 'Sanskrit',
     'Persian', 'Turkish', 'Hungarian', 'Finnish', 'Chinese', 'Japanese',
-    'Korean', 'Scottish Gaelic', 'Polish', 'Czech',
-]  # 32 origins + 1 unknown slot = 33 dims
+    'Korean', 'Scottish Gaelic', 'Polish', 'Czech', 'Nature',
+    'American', 'Celestial',
+]  # 35 origins + 1 unknown slot = 36 dims
 
 STRESS_PATTERNS = [
     '1', '10', '01', '100', '010', '001', '110', '101', '011', '1000',
@@ -108,13 +110,13 @@ def build_vector(name_data, embedding):
     gender_val = 1.0 - name_data.get('female_pct', 0.5)
 
     hand_crafted = (
-        one_hot(name_data['origin'], ORIGINS) +           # 33 dims
+        [x * ORIGIN_SCALE for x in one_hot(name_data['origin'], ORIGINS)] +  # 36 dims, scaled
         [year_norm, syl_norm] +                            #  2 dims
         one_hot(name_data['stresses'], STRESS_PATTERNS) + # 11 dims
         [vowel_ratio, length_norm] +                       #  2 dims
         [gender_val, gender_val, gender_val,               #  3 dims (repeated for cosine weight)
          pop_norm]                                         #  1 dim
-    )  # subtotal: 52 dims
+    )  # subtotal: 55 dims
 
     return hand_crafted + [x * EMBEDDING_SCALE for x in embedding]  # 65 + 64 = 129 dims
 

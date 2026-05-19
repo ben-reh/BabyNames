@@ -17,11 +17,11 @@ SCRIPTS_DIR = os.path.dirname(__file__)
 PROCESSED_DIR = os.path.join(SCRIPTS_DIR, '..', 'processed')
 VECTORS_PATH = os.path.join(PROCESSED_DIR, 'name_vectors.csv')
 
-HC_DIMS = 52
+HC_DIMS = 53
 EMBED_DIMS = 512
 TOP_N = 10
 PASS_THRESHOLD = 7.0
-SCALES_TO_TRY = [3, 4, 5, 6]
+SCALES_TO_TRY = [1, 2, 3, 4, 5]
 
 UNISEX_MIN = 0.05   # classification boundary
 UNISEX_MAX = 0.95
@@ -169,6 +169,179 @@ Return only the JSON, no other text."""
     return json.loads(text)
 
 
+BIMODAL_TEST_CASES = [
+    {
+        "description": "Biblical boy names + nature/whimsical names",
+        "liked_names": ["Noah", "Elijah", "Isaac", "Jonah", "Ezra", "Levi", "Asher", "Micah",
+                        "Willow", "Juniper", "Sage", "Fern", "River", "Aurora", "Violet"],
+        "expected_styles": ["biblical (Noah/Elijah-style)", "nature/whimsical (Willow/Juniper-style)"],
+        "sex": None,
+    },
+    {
+        "description": "Classic/vintage girl names + modern/celestial girl names",
+        "liked_names": ["Eleanor", "Margaret", "Catherine", "Josephine", "Beatrice",
+                        "Harriet", "Agnes", "Edith",
+                        "Luna", "Nova", "Aria", "Stella", "Ivy", "Mila", "Zara"],
+        "expected_styles": ["classic/vintage (Eleanor/Margaret-style)", "modern/celestial (Luna/Nova-style)"],
+        "sex": "F",
+    },
+]
+
+CLUSTER_MIN_LIKES = 8
+CLUSTER_K_HIGH = 3
+CLUSTER_K_HIGH_THRESHOLD = 20
+
+
+def kmeans(vectors: np.ndarray, k: int, max_iter: int = 20) -> np.ndarray:
+    rng = np.random.default_rng(42)
+    centroids = [vectors[rng.integers(len(vectors))]]
+    for _ in range(k - 1):
+        dists = np.min(
+            np.stack([np.sum((vectors - c) ** 2, axis=1) for c in centroids]),
+            axis=0,
+        )
+        probs = dists / dists.sum()
+        centroids.append(vectors[rng.choice(len(vectors), p=probs)])
+    centroids = np.array(centroids, dtype=np.float32)
+
+    for _ in range(max_iter):
+        diffs = vectors[:, None, :] - centroids[None, :, :]
+        labels = np.argmin(np.sum(diffs ** 2, axis=2), axis=1)
+        new_centroids = np.array([
+            vectors[labels == i].mean(axis=0) if (labels == i).any() else centroids[i]
+            for i in range(k)
+        ], dtype=np.float32)
+        if np.allclose(centroids, new_centroids, atol=1e-6):
+            break
+        centroids = new_centroids
+
+    return centroids
+
+
+def get_multi_vector_neighbors(
+    names, counts, female_pcts, hc, emb,
+    liked_names: list[str], sex: str | None, scale: float, top_n: int,
+    min_count: int = 200,
+) -> list[str]:
+    all_vecs = np.concatenate([hc, emb * scale], axis=1)
+    norms = np.linalg.norm(all_vecs, axis=1, keepdims=True)
+    norms[norms == 0] = 1e-9
+    normed = all_vecs / norms
+
+    liked_indices = [names.index(n) for n in liked_names if n in names]
+    if not liked_indices:
+        return []
+
+    liked_vecs = all_vecs[liked_indices]
+    k = CLUSTER_K_HIGH if len(liked_indices) >= CLUSTER_K_HIGH_THRESHOLD else 2
+    k = min(k, len(liked_indices))
+    centroids = kmeans(liked_vecs, k)
+    # normalize centroids for cosine sim
+    cnorms = np.linalg.norm(centroids, axis=1, keepdims=True)
+    cnorms[cnorms == 0] = 1e-9
+    normed_centroids = centroids / cnorms
+
+    liked_set = set(liked_names)
+    cluster_lists: list[list[str]] = []
+    for centroid in normed_centroids:
+        sims = normed @ centroid
+        result = []
+        for i in np.argsort(sims)[::-1]:
+            if len(result) >= top_n:
+                break
+            name = names[i]
+            if name in liked_set:
+                continue
+            if counts[i] < min_count:
+                continue
+            if sex is not None and not sex_matches(female_pcts[i], sex):
+                continue
+            result.append(name)
+        cluster_lists.append(result)
+
+    seen: set[str] = set()
+    interleaved: list[str] = []
+    for i in range(max((len(lst) for lst in cluster_lists), default=0)):
+        for lst in cluster_lists:
+            if i < len(lst) and lst[i] not in seen:
+                seen.add(lst[i])
+                interleaved.append(lst[i])
+                if len(interleaved) >= top_n:
+                    return interleaved
+    return interleaved
+
+
+def judge_multi_vector(test_cases: list[dict], recs_by_case: list[list[str]], client) -> list[dict]:
+    cases_text = ""
+    for tc, recs in zip(test_cases, recs_by_case):
+        rec_list = "\n".join(f"  {i+1}. {n}" for i, n in enumerate(recs[:10]))
+        cases_text += (
+            f"\n---\nLiked names: {', '.join(tc['liked_names'])}\n"
+            f"Description: {tc['description']}\n"
+            f"Expected styles: {' AND '.join(tc['expected_styles'])}\n"
+            f"Recommendations:\n{rec_list}\n"
+        )
+
+    prompt = f"""You are evaluating a multi-vector baby name recommendation system.
+Each test case shows a user who likes names from TWO distinct style clusters.
+The system should recommend names that cover BOTH styles, not just one.
+
+For each case score 1-10:
+10 = Excellent — recommendations clearly cover both styles
+7  = Good — both styles present but one dominates
+5  = Mixed — one style mostly missing
+3  = Poor — recommendations collapsed to one style only
+1  = Bad — wrong styles entirely
+
+{cases_text}
+
+Respond with a JSON array, one object per case, in order:
+[{{"score": 8, "reason": "short reason", "styles_found": ["style1", "style2"]}}, ...]
+
+Return only the JSON array, no other text."""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = message.content[0].text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    return json.loads(text)
+
+
+def eval_multi_vector(names, counts, female_pcts, hc, emb, client, scale: float = 5.0):
+    print(f"\n--- Multi-vector eval (scale={scale}x) ---")
+    missing = [n for tc in BIMODAL_TEST_CASES for n in tc['liked_names'] if n not in names]
+    if missing:
+        print(f"  WARNING: names not in vectors: {missing}")
+
+    recs_by_case = [
+        get_multi_vector_neighbors(
+            names, counts, female_pcts, hc, emb,
+            tc['liked_names'], tc['sex'], scale, TOP_N,
+        )
+        for tc in BIMODAL_TEST_CASES
+    ]
+
+    for tc, recs in zip(BIMODAL_TEST_CASES, recs_by_case):
+        print(f"  {tc['description']}")
+        print(f"    Recs: {', '.join(recs[:10])}")
+
+    results = judge_multi_vector(BIMODAL_TEST_CASES, recs_by_case, client)
+    avg = sum(r['score'] for r in results) / len(results)
+    passed = avg >= PASS_THRESHOLD
+    status = "PASS ✓" if passed else "fail"
+    print(f"\n  Multi-vector avg: {avg:.1f}/10  {status}")
+    for tc, r in zip(BIMODAL_TEST_CASES, results):
+        print(f"  {tc['description'][:50]:50}  score={r['score']}  {r['reason']}")
+    return passed
+
+
 def main():
     print(f"Loading vectors from {VECTORS_PATH}...")
     names, counts, female_pcts, hc, emb = load_vectors()
@@ -219,6 +392,7 @@ def main():
                 reason = scores.get(tc["name"], {}).get("reason", "")
                 print(f"  {tc['name']:12} → {', '.join(nbrs)}")
                 print(f"               Judge: {reason}")
+            eval_multi_vector(names, counts, female_pcts, hc, emb, client, scale=float(scale))
             print(f"\n→ Set EMBEDDING_SCALE = {scale} in compute_vectors.py, then re-run it and upload.")
             return
 
@@ -233,6 +407,8 @@ def main():
     for tc in TEST_CASES:
         nbrs = [n for n, _ in neighbors_by_name[tc["name"]][:5]]
         print(f"  {tc['name']:12} → {', '.join(nbrs)}")
+
+    eval_multi_vector(names, counts, female_pcts, hc, emb, client, scale=float(best_scale or 5))
 
 
 if __name__ == '__main__':
