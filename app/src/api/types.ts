@@ -4,6 +4,7 @@ export interface Name {
   rank: number | null;
   rank_2025: number | null;
   origin: string | null;
+  meaning: string | null;
   year_peak: number | null;
   total_count: number | null;
   female_pct: number | null;

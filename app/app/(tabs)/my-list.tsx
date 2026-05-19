@@ -85,7 +85,7 @@ function SectionHeader({
       </View>
       <View style={styles.sectionHeaderRight}>
         {right}
-        <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textMuted} />
+        <Ionicons name={expanded ? 'chevron-down' : 'chevron-back'} size={18} color={colors.textMuted} />
       </View>
     </TouchableOpacity>
   );

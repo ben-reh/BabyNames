@@ -136,6 +136,9 @@ export default function NameDetail() {
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.name}>{nameData.name}</Text>
+        {nameData.meaning && (
+          <Text style={styles.meaning}>"{nameData.meaning}"</Text>
+        )}
 
         <View style={styles.statsRow}>
           {nameData.year_peak && (
@@ -277,7 +280,8 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   headerBar: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg + spacing.md, paddingBottom: spacing.md, alignItems: 'flex-end' },
   content: { paddingHorizontal: spacing.lg, paddingBottom: 120 },
-  name: { fontSize: fontSize.xxl, fontWeight: '900', color: colors.text, marginBottom: spacing.md },
+  name: { fontSize: fontSize.xxl, fontWeight: '900', color: colors.text, marginBottom: spacing.xs },
+  meaning: { fontSize: fontSize.md, color: colors.textMuted, fontStyle: 'italic', marginBottom: spacing.lg },
   statsRow: { flexDirection: 'row', gap: spacing.xl, marginBottom: spacing.lg, flexWrap: 'wrap' },
   stat: { alignItems: 'center' },
   statValue: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text, textAlign: 'center' },
