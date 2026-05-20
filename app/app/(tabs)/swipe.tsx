@@ -327,7 +327,7 @@ const styles = StyleSheet.create({
   headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
   deckContainer: { flex: 1 },
-  card: { height: '87%', borderRadius: radius.xl, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 5 },
+  card: { height: '69%', borderRadius: radius.xl, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 5 },
   cardContent: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.lg },
   cardName: { fontSize: fontSize.xxl, fontWeight: '900', color: colors.text },
   cardMeta: { flexDirection: 'row', gap: spacing.md },
