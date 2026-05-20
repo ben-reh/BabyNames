@@ -38,21 +38,27 @@
 
 ## Recommendation Model
 
+### Completed
+- [x] **Multi-vector taste representation** — k-means clusters liked names into 2–3 style groups (k=2 at 8+ swipes, k=3 at 20+); round-robin interleaves results to maintain style diversity
+- [x] **Partner taste blending** — blend both partners' taste vectors (`0.5 * user + 0.5 * partner`) for ANN query instead of just priority-sorting partner-liked names
+- [x] **Long-tail exploration** — diversity component injects long-tail names weighted by origin/style fit
+- [x] **Skip signal** — quick-swipe-past captured as implicit dislike to improve taste vector quality
+- [x] **Embedding model upgrade** — switched from `text-embedding-3-small` to `text-embedding-3-large` (Matryoshka, `dimensions=512`); oracle recall@100 improved 45% → 56%, Reddit co-occurrence recall +28%
+- [x] **Retrieval tuning** — K-sweep confirmed K=100 is optimal production ceiling; hill-climb found `scale=7`, `origin_weight=1.5` as optimal eval-time parameters
+- [x] **Two-stage reranker** — GBC reranker trained on 177 LLM-generated anchor/gold/trap sets; blended scoring (`0.2 × cosine + 0.8 × reranker`); oracle recall@20 +2pp, trap rate -2pp
+
 ### High priority
 - [ ] **Collaborative filtering** — co-like signals once real users exist; highest single-improvement lever
-- [ ] **Multi-vector taste representation** — cluster liked names into 2–3 style groups instead of single average; handles bimodal preferences (user who likes both biblical and nature names)
 - [ ] **Rarity preference detection** — detect from swipe history whether user prefers rare vs. common names; adjust minimum count threshold accordingly
-- [x] **Partner taste blending** — blend both partners' taste vectors (`0.5 * user + 0.5 * partner`) for ANN query instead of just priority-sorting partner-liked names
+- [ ] **Bimodal multi-vector improvement** — current k-means correctly separates style clusters but celestial/modern cluster ANN neighbors collapse into generic popular names; needs investigation
 
 ### Medium priority
 - [ ] **Trend velocity feature** — add 3–5 year popularity slope from RDS `name_popularity` data; distinguishes "peaked 2020, now declining" from "peaked 2020, still rising"
-- [x] **Long-tail exploration** — rare names (Melrose, Dawn, Rue) have vectors but never surface because a generic taste vector points toward popular names in ANN search; add a diversity/exploration component that injects long-tail names weighted by origin/style fit, independent of similarity score
-- [x] **Skip signal** — capture quick-swipe-past as implicit dislike; improve taste vector quality
 
 ### Lower priority
 - [ ] **Sibling name compatibility** — factor in existing children's names for families on their second+ child
 - [ ] **Origin language-family grouping** — replace flat one-hot with language family hierarchy (Romance / Germanic / Celtic / Biblical / etc.)
-- [ ] **Fine-tuned embedding model** — train on baby name co-like data for better semantic separation than general-purpose text-embedding-3-small
+- [ ] **Fine-tuned embedding model** — train on baby name co-like data for better semantic separation; `text-embedding-3-large` is current ceiling without fine-tuning
 
 ---
 
