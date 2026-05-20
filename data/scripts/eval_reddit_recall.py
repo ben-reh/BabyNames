@@ -23,7 +23,7 @@ import numpy as np
 
 SCRIPTS_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(SCRIPTS_DIR, '..')
-VECTORS_PATH = os.path.join(DATA_DIR, 'processed', 'name_vectors.csv')
+DEFAULT_VECTORS_PATH = os.path.join(DATA_DIR, 'processed', 'name_vectors.csv')
 SOURCES = {
     'reddit':     os.path.join(DATA_DIR, 'raw', 'reddit', 'name_lists.jsonl'),
     'nameberry':  os.path.join(DATA_DIR, 'raw', 'nameberry', 'name_lists.jsonl'),
@@ -50,9 +50,11 @@ CONSTRAINED_KEYWORDS = [
 ]
 
 
-def load_vectors():
+def load_vectors(vectors_path: str = None):
+    if vectors_path is None:
+        vectors_path = DEFAULT_VECTORS_PATH
     names, counts, female_pcts, hc_vecs, emb_vecs = [], [], [], [], []
-    with open(VECTORS_PATH) as f:
+    with open(vectors_path) as f:
         for row in csv.DictReader(f):
             v = json.loads(row['vector'])
             names.append(row['name'])
@@ -202,11 +204,14 @@ def main() -> None:
     parser.add_argument('--top-k', type=int, default=20, help="Recall@K (default: 20)")
     parser.add_argument('--source', choices=list(SOURCES.keys()),
                         help="Load only this source (default: all)")
+    parser.add_argument('--vectors', default=None,
+                        help='Path to vectors CSV (default: processed/name_vectors.csv)')
     args = parser.parse_args()
     top_k = args.top_k
 
-    print(f"Loading vectors from {VECTORS_PATH}...")
-    names, counts, female_pcts, normed = load_vectors()
+    vectors_path = args.vectors or DEFAULT_VECTORS_PATH
+    print(f"Loading vectors from {vectors_path}...")
+    names, counts, female_pcts, normed = load_vectors(vectors_path)
     name_to_idx = {n: i for i, n in enumerate(names)}
     print(f"Loaded {len(names):,} names\n")
 

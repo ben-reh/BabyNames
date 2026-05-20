@@ -19,9 +19,21 @@ Vector layout (55 HC dims + 512 embedding dims = 567 total):
   [50]     phoneme length normalized
   [51:54]  gender × 3 dims (F=0, unisex=0.5, M=1) — repeated to give more cosine weight
   [54]     popularity tier — log-normalized 2025 SSA count (groups popular with popular)
-  [55:567] OpenAI text-embedding-3-small * EMBEDDING_SCALE — cultural/vibe signal
+  [55:567] OpenAI embedding * EMBEDDING_SCALE — cultural/vibe signal
   Note: start/end sound category removed — caused phonetic over-clustering by first/last sound
+
+CLI flags:
+  --model {small,large}   embedding model (default: small = text-embedding-3-small)
+                          large = text-embedding-3-large with dimensions=512 (Matryoshka)
+  --output FILENAME       output CSV filename in processed/ (default: name_vectors.csv)
+                          use a staging name when testing a new model before replacing
+
+Examples:
+  python3.12 data/scripts/compute_vectors.py                          # default (small)
+  python3.12 data/scripts/compute_vectors.py --model large \\
+      --output name_vectors_large.csv                                  # stage large model
 """
+import argparse
 import csv
 import json
 import math
@@ -37,6 +49,15 @@ EMBEDDING_DIMS = 512
 EMBED_BATCH_SIZE = 500
 EMBEDDING_SCALE = 1.0  # stored at 1x; eval scripts apply additional scale (default 5x) → 5x effective total
 ORIGIN_SCALE = 2.0    # origin one-hot dims stored at 2.0 to give cultural clustering more cosine weight
+
+EMBED_MODELS = {
+    'small': 'text-embedding-3-small',
+    'large': 'text-embedding-3-large',  # Matryoshka: dimensions=512 reduces from 3072, same vector layout
+}
+EMBED_CACHE_FILES = {
+    'small': 'embeddings_cache.json',
+    'large': 'embeddings_cache_large.json',
+}
 POP_MAX_LOG = math.log1p(50000)  # log(1 + 50k births) — practical ceiling for popularity normalization
 
 ORIGINS = [
@@ -190,22 +211,23 @@ def embedding_prompt(name_data: dict) -> str:
     return f"the baby name {name_data['name']}"
 
 
-def fetch_embeddings(prompts: dict[str, str], client) -> dict[str, list[float]]:
-    cache_path = os.path.join(PROCESSED_DIR, 'embeddings_cache.json')
+def fetch_embeddings(prompts: dict[str, str], client, model: str = 'small') -> dict[str, list[float]]:
+    cache_path = os.path.join(PROCESSED_DIR, EMBED_CACHE_FILES[model])
+    model_id = EMBED_MODELS[model]
     cache: dict[str, list[float]] = {}
     if os.path.exists(cache_path):
         with open(cache_path) as f:
             cache = json.load(f)
-        print(f"  Loaded {len(cache):,} cached embeddings")
+        print(f"  Loaded {len(cache):,} cached embeddings ({model_id})")
 
     names = list(prompts.keys())
     missing = [n for n in names if n not in cache]
     if missing:
-        print(f"  Fetching {len(missing):,} new embeddings from OpenAI...")
+        print(f"  Fetching {len(missing):,} new embeddings from OpenAI ({model_id})...")
         for i in range(0, len(missing), EMBED_BATCH_SIZE):
             batch = missing[i:i + EMBED_BATCH_SIZE]
             response = client.embeddings.create(
-                model='text-embedding-3-small',
+                model=model_id,
                 input=[prompts[n] for n in batch],
                 dimensions=EMBEDDING_DIMS,
             )
@@ -221,9 +243,10 @@ def fetch_embeddings(prompts: dict[str, str], client) -> dict[str, list[float]]:
     return {n: cache[n] for n in names}
 
 
-def compute():
+def compute(model: str = 'small', output_filename: str = 'name_vectors.csv') -> None:
     os.makedirs(PROCESSED_DIR, exist_ok=True)
 
+    print(f"Embedding model: {EMBED_MODELS[model]}")
     print("Loading 2025 SSA counts...")
     counts_2025, female_pcts = load_2025_counts()
     print(f"  {len(counts_2025):,} names in 2025 SSA data")
@@ -240,9 +263,9 @@ def compute():
 
     print("Fetching OpenAI embeddings...")
     prompts = {n['name']: embedding_prompt(n) for n in top_names}
-    embeddings = fetch_embeddings(prompts, client)
+    embeddings = fetch_embeddings(prompts, client, model=model)
 
-    output_path = os.path.join(PROCESSED_DIR, 'name_vectors.csv')
+    output_path = os.path.join(PROCESSED_DIR, output_filename)
     with open(output_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['name', 'count_2025', 'female_pct', 'vector'])
         writer.writeheader()
@@ -261,4 +284,12 @@ def compute():
 
 
 if __name__ == '__main__':
-    compute()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', choices=['small', 'large'], default='small',
+                        help='Embedding model: small=text-embedding-3-small (default), '
+                             'large=text-embedding-3-large (Matryoshka, dimensions=512)')
+    parser.add_argument('--output', default='name_vectors.csv',
+                        help='Output CSV filename in processed/ (default: name_vectors.csv). '
+                             'Use a staging name like name_vectors_large.csv when testing.')
+    args = parser.parse_args()
+    compute(model=args.model, output_filename=args.output)

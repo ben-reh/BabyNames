@@ -24,7 +24,7 @@ import numpy as np
 
 SCRIPTS_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(SCRIPTS_DIR, '..')
-VECTORS_PATH = os.path.join(DATA_DIR, 'processed', 'name_vectors.csv')
+DEFAULT_VECTORS_PATH = os.path.join(DATA_DIR, 'processed', 'name_vectors.csv')
 ORACLE_PATH = os.path.join(DATA_DIR, 'processed', 'oracle_sets.json')
 RERANKER_PATH = os.path.join(DATA_DIR, 'processed', 'reranker.pkl')
 
@@ -44,9 +44,11 @@ POP_DIM = 54
 ORIGIN_ACTIVE_VALUE = 2.0
 
 
-def load_vectors(scale: int, embedding_only: bool = False):
+def load_vectors(scale: int, embedding_only: bool = False, vectors_path: str = None):
+    if vectors_path is None:
+        vectors_path = DEFAULT_VECTORS_PATH
     names, counts, female_pcts, raw_vecs, hc_vecs, emb_vecs = [], [], [], [], [], []
-    with open(VECTORS_PATH) as f:
+    with open(vectors_path) as f:
         for row in csv.DictReader(f):
             v = json.loads(row['vector'])
             names.append(row['name'])
@@ -170,6 +172,9 @@ def main() -> None:
                         help='Re-rank top-100 ANN candidates using trained logistic regression model')
     parser.add_argument('--verbose', action='store_true',
                         help='Print full recommendation list per case')
+    parser.add_argument('--vectors', default=None,
+                        help='Path to vectors CSV (default: processed/name_vectors.csv). '
+                             'Use to evaluate a staging file, e.g. processed/name_vectors_large.csv')
     args = parser.parse_args()
 
     reranker = None
@@ -182,11 +187,15 @@ def main() -> None:
             reranker = pickle.load(f)
         print(f'Loaded re-ranker from {RERANKER_PATH}')
 
+    vectors_path = args.vectors or DEFAULT_VECTORS_PATH
     mode = 'embedding only' if args.embedding_only else f'scale={args.scale}x'
     if args.rerank:
         mode += ' + rerank'
+    if args.vectors:
+        mode += f' [{os.path.basename(args.vectors)}]'
     print(f'Loading vectors ({mode})...')
-    names, counts, female_pcts, vecs, normed = load_vectors(args.scale, args.embedding_only)
+    names, counts, female_pcts, vecs, normed = load_vectors(args.scale, args.embedding_only,
+                                                             vectors_path=vectors_path)
     name_to_idx = {n: i for i, n in enumerate(names)}
     count_by_name = {n: c for n, c in zip(names, counts)}
     print(f'Loaded {len(names):,} names\n')
