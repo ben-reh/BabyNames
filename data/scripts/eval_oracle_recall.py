@@ -67,7 +67,10 @@ def load_vectors(scale: int, embedding_only: bool = False, vectors_path: str = N
     norms = np.linalg.norm(scaled, axis=1, keepdims=True)
     norms[norms == 0] = 1e-9
     normed = scaled / norms
-    return names, counts, female_pcts, vecs, normed
+    emb_norms = np.linalg.norm(emb, axis=1, keepdims=True)
+    emb_norms[emb_norms == 0] = 1e-9
+    emb_normed = emb / emb_norms
+    return names, counts, female_pcts, vecs, normed, emb_normed
 
 
 def origin_index(v: np.ndarray) -> int:
@@ -77,14 +80,21 @@ def origin_index(v: np.ndarray) -> int:
     return -1
 
 
-def reranker_features(q_idx: int, c_idx: int, vecs: np.ndarray, normed: np.ndarray) -> list[float]:
+RERANKER_FEATURE_COUNT = 6  # must match FEATURE_COUNT in train_reranker.py
+
+
+def reranker_features(q_idx: int, c_idx: int,
+                      vecs: np.ndarray, normed: np.ndarray, emb_normed: np.ndarray) -> list[float]:
     q, c = vecs[q_idx], vecs[c_idx]
     cos = float(normed[q_idx] @ normed[c_idx])
+    emb_cos = float(emb_normed[q_idx] @ emb_normed[c_idx])
+    qi = origin_index(q)
+    ci = origin_index(c)
+    origin_match = 1.0 if (qi == ci and qi != -1) else 0.0
     year_diff = abs(float(q[YEAR_DIM]) - float(c[YEAR_DIM]))
     syl_diff = abs(float(q[SYL_DIM]) - float(c[SYL_DIM]))
-    gender_diff = abs(float(q[GENDER_DIM]) - float(c[GENDER_DIM]))
     pop_diff = abs(float(q[POP_DIM]) - float(c[POP_DIM]))
-    return [cos, year_diff, syl_diff, gender_diff, pop_diff]
+    return [cos, emb_cos, origin_match, year_diff, syl_diff, pop_diff]
 
 
 def levenshtein(a: str, b: str) -> int:
@@ -133,23 +143,35 @@ def get_recs(idx: int, sex: str, names: list, counts: list, female_pcts: list,
 
 
 def get_recs_reranked(idx: int, sex: str, names: list, counts: list, female_pcts: list,
-                      vecs: np.ndarray, normed: np.ndarray, reranker, top_k: int,
-                      retrieval_k: int = 100) -> list[str]:
-    """Get top-retrieval_k candidates, re-rank with logistic regression, return top_k."""
+                      vecs: np.ndarray, normed: np.ndarray, emb_normed: np.ndarray,
+                      reranker, top_k: int, retrieval_k: int = 100,
+                      blend: float = 0.5) -> list[str]:
+    """Get top-retrieval_k candidates, re-rank with GBC blended with original cosine rank.
+
+    blend=0.0 → pure reranker; blend=1.0 → pure cosine order; default 0.5.
+    Blending preserves rankings that cosine already gets right while still allowing
+    the reranker to promote names from the tail of the pool.
+    """
     candidates = get_recs(idx, sex, names, counts, female_pcts, normed, retrieval_k)
     if not candidates:
         return []
     name_to_idx = {n: i for i, n in enumerate(names)}
-    feat_matrix = np.array([
-        reranker_features(idx, name_to_idx[c], vecs, normed)
-        for c in candidates
-        if c in name_to_idx
-    ], dtype=np.float32)
     valid = [c for c in candidates if c in name_to_idx]
-    if len(feat_matrix) == 0:
+    if not valid:
         return candidates[:top_k]
-    scores = reranker.predict_proba(feat_matrix)[:, 1]
-    ranked = [valid[i] for i in np.argsort(scores)[::-1]]
+    feat_matrix = np.array([
+        reranker_features(idx, name_to_idx[c], vecs, normed, emb_normed)
+        for c in valid
+    ], dtype=np.float32)
+    assert feat_matrix.shape[1] == RERANKER_FEATURE_COUNT, (
+        f"Feature mismatch: got {feat_matrix.shape[1]}, expected {RERANKER_FEATURE_COUNT}. "
+        "Retrain reranker with train_reranker.py"
+    )
+    reranker_scores = reranker.predict_proba(feat_matrix)[:, 1]
+    n = len(valid)
+    cosine_scores = np.linspace(1.0, 0.0, n)  # 1.0 for rank-1, 0.0 for rank-n
+    final_scores = blend * cosine_scores + (1.0 - blend) * reranker_scores
+    ranked = [valid[i] for i in np.argsort(final_scores)[::-1]]
     return ranked[:top_k]
 
 
@@ -169,7 +191,9 @@ def main() -> None:
     parser.add_argument('--embedding-only', action='store_true',
                         help='Use only the OpenAI embedding block, ignore all HC features')
     parser.add_argument('--rerank', action='store_true',
-                        help='Re-rank top-100 ANN candidates using trained logistic regression model')
+                        help='Re-rank top-100 ANN candidates using trained reranker model')
+    parser.add_argument('--blend', type=float, default=0.5,
+                        help='Cosine/reranker blend: 0=pure reranker, 1=pure cosine (default: 0.5)')
     parser.add_argument('--verbose', action='store_true',
                         help='Print full recommendation list per case')
     parser.add_argument('--vectors', default=None,
@@ -194,8 +218,8 @@ def main() -> None:
     if args.vectors:
         mode += f' [{os.path.basename(args.vectors)}]'
     print(f'Loading vectors ({mode})...')
-    names, counts, female_pcts, vecs, normed = load_vectors(args.scale, args.embedding_only,
-                                                             vectors_path=vectors_path)
+    names, counts, female_pcts, vecs, normed, emb_normed = load_vectors(
+        args.scale, args.embedding_only, vectors_path=vectors_path)
     name_to_idx = {n: i for i, n in enumerate(names)}
     count_by_name = {n: c for n, c in zip(names, counts)}
     print(f'Loaded {len(names):,} names\n')
@@ -232,7 +256,8 @@ def main() -> None:
         sex = data['sex']
         if reranker is not None:
             recs = get_recs_reranked(idx, sex, names, counts, female_pcts,
-                                     vecs, normed, reranker, top_k)
+                                     vecs, normed, emb_normed, reranker, top_k,
+                                     blend=args.blend)
         else:
             recs = get_recs(idx, sex, names, counts, female_pcts, normed, top_k)
         rec_set = set(recs)
