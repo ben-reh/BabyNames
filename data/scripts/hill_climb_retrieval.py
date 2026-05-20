@@ -27,7 +27,7 @@ MAX_SAME_PREFIX = 2
 SEX_FILTER_F = 0.10
 SEX_FILTER_M = 0.90
 ORIGIN_END = 36          # HC dims [0:36] are origin one-hot, stored at ORIGIN_SCALE=2.0
-STORED_ORIGIN_SCALE = 2.0
+STORED_ORIGIN_SCALE = 1.5
 JUNIPER_FLOOR = 0.60     # hard guard: Juniper recall@20 must stay >= this
 
 SCALE_GRID = [3.0, 4.0, 5.0, 6.0, 8.0]

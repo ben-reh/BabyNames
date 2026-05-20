@@ -48,7 +48,7 @@ YEAR_MIN, YEAR_MAX = 1880, 2025
 EMBEDDING_DIMS = 512
 EMBED_BATCH_SIZE = 500
 EMBEDDING_SCALE = 1.0  # stored at 1x; eval scripts apply additional scale (default 5x) → 5x effective total
-ORIGIN_SCALE = 2.0    # origin one-hot dims stored at 2.0 to give cultural clustering more cosine weight
+ORIGIN_SCALE = 1.5    # origin one-hot dims stored at 1.5; hill-climb confirmed optimal vs 2.0
 
 EMBED_MODELS = {
     'small': 'text-embedding-3-small',

@@ -41,7 +41,7 @@ YEAR_DIM = 36
 SYL_DIM = 37
 GENDER_DIM = 51
 POP_DIM = 54
-ORIGIN_ACTIVE_VALUE = 2.0
+ORIGIN_ACTIVE_VALUE = 1.5
 
 
 def load_vectors(scale: int, embedding_only: bool = False, vectors_path: str = None):

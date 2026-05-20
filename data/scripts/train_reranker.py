@@ -55,7 +55,7 @@ LLM_WEIGHT = 10.0        # sample weight for LLM training oracle examples
 NAMEBERRY_WEIGHT = 1.0   # sample weight for Nameberry co-occurrence examples
 
 ORIGIN_END = 36
-ORIGIN_ACTIVE_VALUE = 2.0
+ORIGIN_ACTIVE_VALUE = 1.5
 YEAR_DIM = 36
 SYL_DIM = 37
 POP_DIM = 54

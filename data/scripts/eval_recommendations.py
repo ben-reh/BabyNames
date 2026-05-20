@@ -17,11 +17,11 @@ SCRIPTS_DIR = os.path.dirname(__file__)
 PROCESSED_DIR = os.path.join(SCRIPTS_DIR, '..', 'processed')
 VECTORS_PATH = os.path.join(PROCESSED_DIR, 'name_vectors.csv')
 
-HC_DIMS = 53
+HC_DIMS = 55
 EMBED_DIMS = 512
 TOP_N = 10
 PASS_THRESHOLD = 7.0
-SCALES_TO_TRY = [1, 2, 3, 4, 5]
+SCALES_TO_TRY = [7]  # optimal scale for text-embedding-3-large; update if re-tuned
 
 UNISEX_MIN = 0.05   # classification boundary
 UNISEX_MAX = 0.95
