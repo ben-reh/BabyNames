@@ -2,14 +2,15 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
-import { useAddName, useList } from '../../src/api/lists';
-import { useInfiniteNames } from '../../src/api/names';
+import { useAddName, useList, useRemoveName } from '../../src/api/lists';
+import { useInfiniteNames, useNameSearch } from '../../src/api/names';
 import { useInfiniteRecommendations } from '../../src/api/recommendations';
 import { useRecordSwipe } from '../../src/api/swipe';
 import type { Name } from '../../src/api/types';
 import { useSessionStore, useFilterStore, useSeenNamesStore } from '../../src/store';
+import { ProfileAvatar } from '../../src/components/ProfileAvatar';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 import { logSwipe, logTimeToFirstCard, logQueueFetch, logQueueRebuild } from '../../src/utils/analytics';
 
@@ -44,6 +45,8 @@ export default function SwipeScreen() {
   const filters = useFilterStore();
   const { seenNames, addSeen } = useSeenNamesStore();
   const swiperRef = useRef<Swiper<Name>>(null);
+  const [q, setQ] = useState('');
+  const inputRef = useRef<TextInput>(null);
   const [queue, setQueue] = useState<Name[]>([]);
   const [cardIndex, setCardIndex] = useState(0);
   const [deckHeight, setDeckHeight] = useState(0);
@@ -56,7 +59,9 @@ export default function SwipeScreen() {
   // and cause a one-frame flash of the wrong card. Cleared after the next filter pass.
   const justSwipedRef = useRef<string | null>(null);
   const addName = useAddName(listId!);
+  const removeName = useRemoveName(listId!);
   const { mutate: recordSwipe } = useRecordSwipe();
+  const { data: searchResults, isLoading: searchLoading } = useNameSearch(q);
 
   const { data: listData } = useList(listId);
   const likedNames = useMemo(() => {
@@ -193,18 +198,48 @@ export default function SwipeScreen() {
     [queue, deviceId, addSeen, recordSwipe],
   );
 
-  if (!queue.length) {
+  const renderSearchItem = ({ item }: { item: Name }) => {
+    const isLiked = likedNames.has(item.name);
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
+      <TouchableOpacity style={styles.searchRow} onPress={() => router.push(`/name/${item.name}`)}>
+        <Text style={[styles.sexIcon, item.sex === 'F' ? styles.sexF : styles.sexM]}>
+          {item.sex === 'F' ? '♀' : '♂'}
+        </Text>
+        <View style={styles.nameCol}>
+          <Text style={styles.nameText}>{item.name}</Text>
+          {item.origin && (
+            <View style={styles.originBadge}>
+              <Text style={styles.originText}>{item.origin}</Text>
+            </View>
+          )}
+        </View>
+        <TouchableOpacity
+          hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+          onPress={() => {
+            if (!deviceId) return;
+            if (isLiked) {
+              removeName.mutate({ deviceId, name: item.name });
+            } else {
+              addName.mutate({ deviceId, name: item.name });
+              recordSwipe({ deviceId, name: item.name, liked: true, sex_context: filters.sex });
+            }
+          }}
+        >
+          <Ionicons name={isLiked ? 'heart' : 'heart-outline'} size={22} color={isLiked ? colors.primary : colors.textMuted} />
+        </TouchableOpacity>
+      </TouchableOpacity>
     );
-  }
+  };
+
+  const searching = q.length >= 2;
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Discover</Text>
+        <View style={styles.headerLeft}>
+          <ProfileAvatar />
+          <Text style={styles.headerTitle}>Discover</Text>
+        </View>
         <View style={styles.headerRight}>
           <View style={styles.sexToggle}>
             {([['F', '♀ Girl'], ['U', 'Unisex'], ['M', '♂ Boy']] as ['F' | 'U' | 'M', string][]).map(([val, label]) => (
@@ -224,27 +259,63 @@ export default function SwipeScreen() {
         </View>
       </View>
 
-      <View style={styles.deckContainer} onLayout={(e) => setDeckHeight(e.nativeEvent.layout.height)}>
-        <Swiper
-          key={committedFilterKey}
-          ref={swiperRef}
-          cards={queue}
-          cardIndex={cardIndex}
-          renderCard={(name) => <NameCard name={name} sex={filters.sex} />}
-          onSwipedRight={handleSwipedRight}
-          onSwipedLeft={handleSwipedLeft}
-          backgroundColor="transparent"
-          cardVerticalMargin={deckHeight > 0 ? Math.round(deckHeight * 0.03) : 4}
-          stackSize={3}
-          stackSeparation={12}
-          overlayLabels={{
-            left: { title: 'NOPE', style: { label: styles.overlayNope, wrapper: styles.overlayWrapperLeft } },
-            right: { title: '❤️', style: { label: styles.overlayLike, wrapper: styles.overlayWrapperRight } },
-          }}
-          infinite={false}
-          animateOverlayLabelsOpacity
-        />
+      <View style={styles.searchBarRow}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={18} color={colors.textMuted} style={styles.searchIcon} />
+          <TextInput
+            ref={inputRef}
+            style={styles.searchInput}
+            value={q}
+            onChangeText={setQ}
+            placeholder="Search names…"
+            placeholderTextColor={colors.textMuted}
+            autoCorrect={false}
+            autoCapitalize="none"
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+          />
+        </View>
       </View>
+
+      {searching ? (
+        searchLoading ? (
+          <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>
+        ) : (searchResults?.length ?? 0) === 0 ? (
+          <View style={styles.center}><Text style={styles.emptyText}>No names found</Text></View>
+        ) : (
+          <FlatList
+            data={searchResults}
+            keyExtractor={(item) => item.name}
+            renderItem={renderSearchItem}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.searchList}
+          />
+        )
+      ) : !queue.length ? (
+        <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>
+      ) : (
+        <View style={styles.deckContainer} onLayout={(e) => setDeckHeight(e.nativeEvent.layout.height)}>
+          <Swiper
+            key={committedFilterKey}
+            ref={swiperRef}
+            cards={queue}
+            cardIndex={cardIndex}
+            renderCard={(name) => <NameCard name={name} sex={filters.sex} />}
+            onSwipedRight={handleSwipedRight}
+            onSwipedLeft={handleSwipedLeft}
+            backgroundColor="transparent"
+            cardVerticalMargin={deckHeight > 0 ? Math.round(deckHeight * 0.03) : 4}
+            stackSize={3}
+            stackSeparation={12}
+            overlayLabels={{
+              left: { title: 'NOPE', style: { label: styles.overlayNope, wrapper: styles.overlayWrapperLeft } },
+              right: { title: '❤️', style: { label: styles.overlayLike, wrapper: styles.overlayWrapperRight } },
+            }}
+            infinite={false}
+            animateOverlayLabelsOpacity
+          />
+        </View>
+      )}
     </View>
   );
 }
@@ -253,6 +324,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.lg, paddingTop: spacing.xl + spacing.lg, paddingBottom: spacing.md },
+  headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
   deckContainer: { flex: 1 },
   card: { height: '87%', borderRadius: radius.xl, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 5 },
@@ -272,4 +344,18 @@ const styles = StyleSheet.create({
   overlayLike: { fontSize: 32, fontWeight: '900', color: colors.success, borderWidth: 3, borderColor: colors.success, padding: spacing.sm, borderRadius: radius.sm },
   overlayWrapperLeft: { flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'flex-start', marginTop: 30, marginLeft: -30 },
   overlayWrapperRight: { flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', marginTop: 30, marginLeft: 30 },
+  searchBarRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1.5, borderColor: colors.border, paddingHorizontal: spacing.md },
+  searchIcon: { marginRight: spacing.sm },
+  searchInput: { flex: 1, height: 44, fontSize: fontSize.md, color: colors.text },
+  searchList: { paddingBottom: spacing.xl },
+  searchRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border, gap: spacing.md },
+  sexIcon: { fontSize: fontSize.md, fontWeight: '700', width: 18, textAlign: 'center' },
+  sexF: { color: colors.primary },
+  sexM: { color: colors.secondary },
+  nameCol: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
+  nameText: { fontSize: fontSize.md, fontWeight: '700', color: colors.text },
+  originBadge: { backgroundColor: colors.primaryLight, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 2 },
+  originText: { fontSize: fontSize.xs, color: colors.primary, fontWeight: '600' },
+  emptyText: { fontSize: fontSize.md, color: colors.textMuted },
 });

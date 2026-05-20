@@ -48,14 +48,7 @@ export default function TabsLayout() {
             tabBarIcon: ({ color, size }) => <Ionicons name="heart" size={size} color={color} />,
           }}
         />
-        <Tabs.Screen
-          name="search"
-          options={{
-            title: 'Search',
-            tabBarIcon: ({ color, size }) => <Ionicons name="search" size={size} color={color} />,
-          }}
-        />
-        <Tabs.Screen
+<Tabs.Screen
           name="my-list"
           options={{
             title: 'My Lists',
@@ -75,6 +68,10 @@ export default function TabsLayout() {
             title: 'Ask AI',
             tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" size={size} color={color} />,
           }}
+        />
+        <Tabs.Screen
+          name="profile"
+          options={{ href: null }}
         />
       </Tabs>
       <MatchBanner />
