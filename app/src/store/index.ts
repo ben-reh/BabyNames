@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import type { ConsultantName } from '../api/consultant';
 
 interface SessionState {
   listId: string | null;
@@ -124,3 +125,31 @@ export const useAuthStore = create<AuthState>()((set) => ({
   setMigrationDone: () => set({ migrationDone: true }),
   clearAuth: () => set({ sub: null, email: null, migrationDone: false }),
 }));
+
+interface ConsultantSession {
+  profileSummary: string;
+  partnerSummary: string | null;
+  names: ConsultantName[];
+  generatedAt: number;
+}
+
+interface ConsultantStoreState {
+  session: ConsultantSession | null;
+  vibeText: string;
+  setSession: (session: Omit<ConsultantSession, 'generatedAt'>) => void;
+  setVibeText: (text: string) => void;
+  clearSession: () => void;
+}
+
+export const useConsultantStore = create<ConsultantStoreState>()(
+  persist(
+    (set) => ({
+      session: null,
+      vibeText: '',
+      setSession: (s) => set({ session: { ...s, generatedAt: Date.now() } }),
+      setVibeText: (text) => set({ vibeText: text }),
+      clearSession: () => set({ session: null }),
+    }),
+    { name: 'consultant', storage: createJSONStorage(() => AsyncStorage) },
+  ),
+);
