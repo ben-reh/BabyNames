@@ -109,6 +109,7 @@ export async function consultantSession(body: Record<string, unknown>) {
   const listId = body.listId as string | undefined;
   const vibeText = (body.vibeText as string | undefined)?.trim();
   const sex = body.sex as string | undefined;
+  const sexCtx = (sex === 'F' || sex === 'M' || sex === 'U') ? sex : 'U';
 
   if (!deviceId) return err(400, 'deviceId is required');
 
@@ -117,16 +118,16 @@ export async function consultantSession(body: Record<string, unknown>) {
   // --- 1. Fetch taste context ---
   const [tasteResult, likedSwipesResult, passedSwipesResult] = await Promise.all([
     pool.query<{ embedding: string; liked_count: number; disliked_count: number }>(
-      'SELECT embedding, liked_count, disliked_count FROM user_taste WHERE user_id = $1 ORDER BY liked_count DESC LIMIT 1',
-      [deviceId],
+      'SELECT embedding, liked_count, disliked_count FROM user_taste WHERE user_id = $1 AND sex_context = $2',
+      [deviceId, sexCtx],
     ),
     pool.query<{ name: string }>(
-      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true ORDER BY swiped_at DESC LIMIT 50',
-      [deviceId],
+      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true AND sex_context = $2 ORDER BY swiped_at DESC LIMIT 50',
+      [deviceId, sexCtx],
     ),
     pool.query<{ name: string }>(
-      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = false ORDER BY swiped_at DESC LIMIT 5',
-      [deviceId],
+      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = false AND sex_context = $2 ORDER BY swiped_at DESC LIMIT 50',
+      [deviceId, sexCtx],
     ),
   ]);
 
@@ -150,8 +151,8 @@ export async function consultantSession(body: Record<string, unknown>) {
           : list.partnerA?.deviceId;
       if (!partnerDeviceId) return null;
       const { rows } = await pool.query<{ name: string }>(
-        'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true ORDER BY swiped_at DESC LIMIT 8',
-        [partnerDeviceId],
+        'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true AND sex_context = $2 ORDER BY swiped_at DESC LIMIT 8',
+        [partnerDeviceId, sexCtx],
       );
       return rows.map((r) => r.name);
     })(),
