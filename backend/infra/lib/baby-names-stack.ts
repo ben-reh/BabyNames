@@ -205,7 +205,11 @@ export class BabyNamesStack extends cdk.Stack {
     }));
     consultantFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel'],
-      resources: [`arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0`],
+      resources: [
+        `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0`,
+        `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0`,
+        `arn:aws:bedrock:${this.region}::foundation-model/amazon.nova-micro-v1:0`,
+      ],
     }));
 
     // --- Lambda: AI chat handler (outside VPC — needs internet for Bedrock) ---

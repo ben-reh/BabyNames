@@ -6,7 +6,9 @@ import { ok, err } from '../../utils';
 import { buildProfileSummaryPrompt, buildVibeTranslationPrompt, buildNameDescriptionsPrompt } from './prompts';
 
 const LISTS_TABLE = 'Lists';
-const MODEL_ID = process.env.BEDROCK_MODEL_ID ?? 'anthropic.claude-3-5-sonnet-20241022-v2:0';
+const MODEL_SUMMARY     = 'anthropic.claude-3-5-sonnet-20241022-v2:0'; // profile prose — quality matters
+const MODEL_VIBE        = 'amazon.nova-micro-v1:0';                    // JSON extraction only
+const MODEL_DESCRIPTIONS = 'anthropic.claude-3-haiku-20240307-v1:0';  // personalized copy, high volume
 const RESULT_SIZE = 15;
 
 const NP_AGG = `(SELECT name, SUM(count) AS count FROM name_popularity WHERE year = 2025 GROUP BY name) np`;
@@ -30,9 +32,9 @@ const bedrock = new BedrockRuntimeClient({
   region: process.env.BEDROCK_REGION ?? process.env.AWS_REGION,
 });
 
-async function callClaude(system: string, user: string, maxTokens: number): Promise<string> {
+async function callModel(modelId: string, system: string, user: string, maxTokens: number): Promise<string> {
   const response = await bedrock.send(new ConverseCommand({
-    modelId: MODEL_ID,
+    modelId,
     system: [{ text: system }],
     messages: [{ role: 'user', content: [{ text: user }] }],
     inferenceConfig: { maxTokens },
@@ -162,7 +164,7 @@ export async function consultantSession(body: Record<string, unknown>) {
   let partnerSummary: string | null = null;
 
   if (likedNames.length > 0 || passedNames.length > 0) {
-    const rawSummary = await callClaude(profileSystem, profileUser, 200);
+    const rawSummary = await callModel(MODEL_SUMMARY, profileSystem, profileUser, 200);
     if (partnerLikedMeta && partnerLikedMeta.length > 0) {
       const sentences = rawSummary.split(/(?<=[.!?])\s+/);
       if (sentences.length >= 2) {
@@ -186,7 +188,7 @@ export async function consultantSession(body: Record<string, unknown>) {
 
   if (vibeText) {
     const { vibeSystem, vibeUser } = buildVibeTranslationPrompt({ vibeText, profileSummary });
-    const vibeRaw = await callClaude(vibeSystem, vibeUser, 300);
+    const vibeRaw = await callModel(MODEL_VIBE, vibeSystem, vibeUser, 300);
     const parsed = parseJsonSafe<VibeAdjustments>(vibeRaw);
     if (parsed) vibeAdjustments = { ...vibeAdjustments, ...parsed };
   }
@@ -265,7 +267,7 @@ export async function consultantSession(body: Record<string, unknown>) {
     nameList: nameListText,
   });
 
-  const descriptionsRaw = await callClaude(descSystem, descUser, 700);
+  const descriptionsRaw = await callModel(MODEL_DESCRIPTIONS, descSystem, descUser, 700);
   const descriptions =
     parseJsonSafe<{ name: string; description: string }[]>(descriptionsRaw) ?? [];
   const descMap = new Map(descriptions.map((d) => [d.name, d.description]));
