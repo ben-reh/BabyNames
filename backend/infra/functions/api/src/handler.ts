@@ -4,6 +4,7 @@ import { getNameRank, getPopularity } from './routes/popularity';
 import { createList, joinList, getList, addName, removeName } from './routes/lists';
 import { getRecommendations, getUserSwipes, recordSwipe } from './routes/recommendations';
 import { listTagDefs, listTagAssignments, createTag, deleteTag, setNameTags, getPartnerTags } from './routes/tags';
+import { recordConsultantFeedback } from './routes/consultant/feedback';
 import { err } from './utils';
 
 type Params = Record<string, string | undefined>;
@@ -136,6 +137,13 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
         decodeURIComponent(listNameMatch[2]),
         parseBody(event),
       ));
+    }
+
+    // --- Consultant routes ---
+    if (method === 'POST' && path === '/consultant/feedback') {
+      const body = parseBody(event);
+      if (!body.deviceId) return respond(err(400, 'deviceId is required'));
+      return respond(await recordConsultantFeedback(body));
     }
 
     return respond(err(404, 'Not found'));

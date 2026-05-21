@@ -158,6 +158,55 @@ export class BabyNamesStack extends cdk.Stack {
       resources: [nameTagsTable.tableArn],
     }));
 
+    // --- Bedrock Runtime VPC Interface Endpoint (lets in-VPC Lambdas call Bedrock without internet) ---
+    const bedrockEndpointSg = new ec2.SecurityGroup(this, 'BedrockEndpointSg', {
+      vpc,
+      description: 'Bedrock Runtime VPC Endpoint',
+    });
+    bedrockEndpointSg.addIngressRule(lambdaSg, ec2.Port.tcp(443), 'Lambda → Bedrock');
+
+    new ec2.InterfaceVpcEndpoint(this, 'BedrockRuntimeEndpoint', {
+      vpc,
+      service: new ec2.InterfaceVpcEndpointService(`com.amazonaws.${this.region}.bedrock-runtime`),
+      subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [bedrockEndpointSg],
+      privateDnsEnabled: true,
+    });
+
+    // --- Lambda: Consultant handler (in VPC — needs DB + Bedrock via VPC endpoint) ---
+    const consultantFunction = new NodejsFunction(this, 'ConsultantFunction', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, '../functions/api/src/handler-consultant.ts'),
+      handler: 'handler',
+      projectRoot: path.join(__dirname, '..'),
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [lambdaSg],
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 512,
+      environment: {
+        DB_HOST: db.instanceEndpoint.hostname,
+        DB_NAME: 'babynames',
+        DB_USER: 'babynames',
+        DB_PASSWORD: dbSecret.secretValueFromJson('password').unsafeUnwrap(),
+        BEDROCK_REGION: this.region,
+      },
+      bundling: { externalModules: [] },
+    });
+
+    consultantFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:BatchGetItem', 'dynamodb:GetItem', 'dynamodb:Query'],
+      resources: [namesTable.tableArn, `${namesTable.tableArn}/index/*`],
+    }));
+    consultantFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'],
+      resources: [listsTable.tableArn],
+    }));
+    consultantFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel'],
+      resources: [`arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0`],
+    }));
+
     // --- Lambda: AI chat handler (outside VPC — needs internet for Bedrock) ---
     const aiFunction = new NodejsFunction(this, 'AiFunction', {
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -227,6 +276,12 @@ export class BabyNamesStack extends cdk.Stack {
     // /ai routes
     const aiIntegration = new apigateway.LambdaIntegration(aiFunction);
     api.root.addResource('ai').addResource('chat').addMethod('POST', aiIntegration);
+
+    // /consultant routes
+    const consultantIntegration = new apigateway.LambdaIntegration(consultantFunction);
+    const consultant = api.root.addResource('consultant');
+    consultant.addResource('session').addMethod('POST', consultantIntegration);
+    consultant.addResource('feedback').addMethod('POST', integration);
 
     // /lists routes
     const lists = api.root.addResource('lists');

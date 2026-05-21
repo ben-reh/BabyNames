@@ -70,6 +70,13 @@ export default function TabsLayout() {
           }}
         />
         <Tabs.Screen
+          name="consultant"
+          options={{
+            title: 'Consultant',
+            tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" size={size} color={color} />,
+          }}
+        />
+        <Tabs.Screen
           name="profile"
           options={{ href: null }}
         />
