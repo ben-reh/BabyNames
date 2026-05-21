@@ -4,6 +4,7 @@ import { getNameRank, getPopularity } from './routes/popularity';
 import { createList, joinList, getList, addName, removeName } from './routes/lists';
 import { getRecommendations, getUserSwipes, recordSwipe } from './routes/recommendations';
 import { listTagDefs, listTagAssignments, createTag, deleteTag, setNameTags, getPartnerTags } from './routes/tags';
+import { migrateGuestData } from './routes/auth';
 import { err } from './utils';
 
 type Params = Record<string, string | undefined>;
@@ -31,6 +32,11 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   };
 
   try {
+    // --- Auth routes ---
+    if (method === 'POST' && path === '/auth/migrate') {
+      return respond(await migrateGuestData(parseBody(event)));
+    }
+
     // --- Recommendations routes ---
     if (method === 'GET' && path === '/recommendations') {
       if (!params.deviceId) return respond(err(400, 'deviceId is required'));

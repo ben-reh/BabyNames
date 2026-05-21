@@ -5,41 +5,230 @@ const LISTS_TABLE = 'Lists';
 import { getPool } from '../db/postgres';
 import { ok, err } from '../utils';
 import { formatName } from './names';
+import rerankerData from '../reranker.json';
 
 type Params = Record<string, string | undefined>;
 
+// ── Vector layout constants (must match compute_vectors.py) ──────────────────
+const HC_DIMS   = 55;
+const EMBED_DIMS = 512;
+const ORIGIN_END = 36;   // origin one-hot occupies dims [0, ORIGIN_END)
+const YEAR_DIM   = 36;
+const SYL_DIM    = 37;
+const POP_DIM    = 54;
+const ORIGIN_ACTIVE = 1.5;
+const ORIGIN_TOL    = 0.1;
+const VECTOR_DIM    = HC_DIMS + EMBED_DIMS; // 567
+
+// ── Retrieval / deck constants ────────────────────────────────────────────────
+const RETRIEVAL_K  = 100;  // ANN pool size per centroid
+const SIMILARITY_SIZE  = 10;
+const POPULAR_SIZE     = 5;
+const EXPLORATION_SIZE = 5;
+const POPULAR_POOL     = 150;
+const EXPLORATION_MIN_COUNT = 25;
+const EXPLORATION_MAX_COUNT = 499;
+const COLD_START_LIMIT = 100;
+
+// Reranker blend: BLEND * cosine_rank_score + (1 - BLEND) * reranker_score
+const BLEND = 0.2;
+
+// k-means multi-vector thresholds (must match Python handler)
+const CLUSTER_MIN_LIKES        = 8;
+const CLUSTER_K_HIGH_THRESHOLD = 20;
+
+// ── Filter helpers ────────────────────────────────────────────────────────────
 const UNISEX_MIN = 0.05;
 const UNISEX_MAX = 0.95;
 const SEX_FILTER_F = 0.05;
 const SEX_FILTER_M = 0.95;
-const SIMILARITY_POOL = 60;
-const SIMILARITY_SIZE = 10;
-const POPULAR_SIZE = 5;
-const EXPLORATION_SIZE = 5;
-const EXPLORATION_MIN_COUNT = 25;
-const EXPLORATION_MAX_COUNT = 499;
-const POPULAR_POOL = 150;
-const COLD_START_LIMIT = 100;
 
-// Pre-computed diverse cold-start deck (k=10 clusters × 3 names, interleaved by cluster).
-// Regenerate with: python3 data/scripts/compute_cold_start.py
-const COLD_START_DECK: Record<'F' | 'M' | 'U', string[]> = {
-  F: ['Ailany','Josephine','Harper','Charlotte','Emma','Hazel','Sophia','Eleanor','Kennedy','Olivia','Leilani','Jade','Lily','Abigail','Amelia','Lainey','Isabella','Elizabeth','Rose','Evelyn','Ayla','Juniper','Nora','Adeline','Mia','Avery','Eliana','Penelope','Melanie','Violet'],
-  M: ['Mateo','Oliver','Elijah','Lucas','Liam','Alexander','Matthew','John','Ethan','Cooper','Santiago','Theodore','Elias','Luca','Noah','Jackson','Theo','Luke','Owen','Brooks','Anthony','Henry','Julian','Hudson','Levi','Maverick','Archer','Gael','Grayson','Colton'],
-  U: ['Riley','Jordan','Taylor','Quinn','Parker','Morgan','Avery','Charlie','Logan','Harper','Blake','Finley','Rowan','Emerson','Elliot','Hayden','Peyton','Cameron','Reese','Drew','Jamie','Skylar','Dakota','Scout','Sage','Ryan','Dylan','Casey','Marlowe','Sutton'],
-};
-
-// Validate and normalise the sex param — always returns a safe literal
 function vSex(sex: string | undefined): 'F' | 'M' | 'U' {
   return sex === 'F' || sex === 'M' || sex === 'U' ? sex : 'U';
 }
 
-// Fetch all names belonging to the requested origins from DynamoDB origin GSI.
-// Returns null when no origins are requested (meaning: no filter).
+function sexClause(sex: string | undefined): string {
+  const pct = `COALESCE(np.female_pct, nv.female_pct, 0.5)`;
+  if (sex === 'F') return `AND ${pct} >= ${SEX_FILTER_F}`;
+  if (sex === 'M') return `AND ${pct} <= ${SEX_FILTER_M}`;
+  if (sex === 'U') return `AND ${pct} > ${UNISEX_MIN} AND ${pct} < ${UNISEX_MAX}`;
+  return '';
+}
+
+function popularityClause(tiers: string[]): string {
+  if (tiers.length === 0 || tiers.length === 3) return '';
+  const conditions: string[] = [];
+  if (tiers.includes('popular'))  conditions.push('np.count >= 5000');
+  if (tiers.includes('familiar')) conditions.push('(np.count >= 1500 AND np.count < 5000)');
+  if (tiers.includes('unique'))   conditions.push('np.count < 1500');
+  return conditions.length ? `AND (${conditions.join(' OR ')})` : '';
+}
+
+const NP_AGG = `(
+  SELECT name,
+         SUM(count)                                                               AS count,
+         SUM(CASE WHEN gender='F' THEN count ELSE 0 END)::float / NULLIF(SUM(count),0) AS female_pct
+  FROM   name_popularity WHERE year = 2025 GROUP BY name
+) np`;
+
+// ── Math helpers ──────────────────────────────────────────────────────────────
+function parseVec(pgvecStr: string): number[] {
+  return pgvecStr.slice(1, -1).split(',').map(Number);
+}
+
+function l2norm(v: number[]): number[] {
+  let mag = 0;
+  for (const x of v) mag += x * x;
+  mag = Math.sqrt(mag);
+  if (mag === 0) return v.slice();
+  return v.map(x => x / mag);
+}
+
+function dot(a: number[], b: number[]): number {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+  return s;
+}
+
+function sqDist(a: number[], b: number[]): number {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d * d; }
+  return s;
+}
+
+function vecToStr(v: number[]): string {
+  return `[${v.join(',')}]`;
+}
+
+function blendVecs(a: number[], b: number[]): string {
+  return `[${a.map((v, i) => 0.5 * v + 0.5 * b[i]).join(',')}]`;
+}
+
+// ── K-means++ ────────────────────────────────────────────────────────────────
+function kmeanspp(vectors: number[][], k: number, maxIter = 20): number[][] {
+  const n = vectors.length;
+  if (n <= k) return vectors.slice();
+  const dim = vectors[0].length;
+
+  // k-means++ seeding
+  const centroids: number[][] = [vectors[Math.floor(Math.random() * n)]];
+  for (let c = 1; c < k; c++) {
+    const dists = vectors.map(v => Math.min(...centroids.map(cen => sqDist(v, cen))));
+    const total = dists.reduce((a, b) => a + b, 0);
+    let r = Math.random() * total;
+    let chosen = n - 1;
+    for (let i = 0; i < n; i++) { r -= dists[i]; if (r <= 0) { chosen = i; break; } }
+    centroids.push(vectors[chosen]);
+  }
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    const assignments = vectors.map(v =>
+      centroids.reduce((best, cen, i) => sqDist(v, cen) < sqDist(v, centroids[best]) ? i : best, 0),
+    );
+    let changed = false;
+    for (let c = 0; c < k; c++) {
+      const members = vectors.filter((_, i) => assignments[i] === c);
+      if (members.length === 0) continue;
+      const newCen = new Array<number>(dim).fill(0);
+      for (const v of members) for (let d = 0; d < dim; d++) newCen[d] += v[d];
+      for (let d = 0; d < dim; d++) newCen[d] /= members.length;
+      if (sqDist(newCen, centroids[c]) > 1e-12) changed = true;
+      centroids[c] = newCen;
+    }
+    if (!changed) break;
+  }
+  return centroids;
+}
+
+// ── GBC reranker ─────────────────────────────────────────────────────────────
+interface GBCTree {
+  feature: number[];
+  threshold: number[];
+  left: number[];
+  right: number[];
+  value: number[];
+}
+
+interface RerankerModel {
+  learning_rate: number;
+  init_score: number;   // log-odds of positive class
+  scaler_mean: number[];
+  scaler_scale: number[];
+  trees: GBCTree[];
+}
+
+const RERANKER = rerankerData as RerankerModel;
+
+function traverseTree(scaled: number[], tree: GBCTree): number {
+  let node = 0;
+  while (tree.left[node] !== -1) {
+    node = scaled[tree.feature[node]] <= tree.threshold[node]
+      ? tree.left[node]
+      : tree.right[node];
+  }
+  return tree.value[node];
+}
+
+function rerankerScore(rawFeatures: number[]): number {
+  const { scaler_mean, scaler_scale, learning_rate, init_score, trees } = RERANKER;
+  const scaled = rawFeatures.map((x, i) => (x - scaler_mean[i]) / scaler_scale[i]);
+  let F = init_score;
+  for (const tree of trees) F += learning_rate * traverseTree(scaled, tree);
+  return 1 / (1 + Math.exp(-F)); // sigmoid → probability of positive class
+}
+
+function originIndex(v: number[]): number {
+  for (let i = 0; i < ORIGIN_END; i++) {
+    if (Math.abs(v[i] - ORIGIN_ACTIVE) < ORIGIN_TOL) return i;
+  }
+  return -1;
+}
+
+// Features: [cos_sim, emb_cos, origin_match, year_diff, syl_diff, pop_diff]
+function rerankerFeatures(
+  queryVec: number[], queryNorm: number[], queryEmbNorm: number[],
+  candVec:  number[], candNorm:  number[], candEmbNorm:  number[],
+): number[] {
+  const cos        = dot(queryNorm, candNorm);
+  const embCos     = dot(queryEmbNorm, candEmbNorm);
+  const qi         = originIndex(queryVec);
+  const ci         = originIndex(candVec);
+  const origMatch  = (qi === ci && qi !== -1) ? 1.0 : 0.0;
+  const yearDiff   = Math.abs(queryVec[YEAR_DIM] - candVec[YEAR_DIM]);
+  const sylDiff    = Math.abs(queryVec[SYL_DIM]  - candVec[SYL_DIM]);
+  const popDiff    = Math.abs(queryVec[POP_DIM]  - candVec[POP_DIM]);
+  return [cos, embCos, origMatch, yearDiff, sylDiff, popDiff];
+}
+
+// Rerank a pool of candidates against a taste vector.
+// Returns names sorted best-first (blend of cosine rank + GBC score).
+function rerankPool(
+  pool: Array<{ name: string; vec: number[] }>,
+  tasteVec: number[],
+): string[] {
+  if (pool.length === 0) return [];
+  const tasteNorm    = l2norm(tasteVec);
+  const tasteEmbNorm = l2norm(tasteVec.slice(HC_DIMS, HC_DIMS + EMBED_DIMS));
+  const n = pool.length;
+
+  const scored = pool.map(({ name, vec }, rank) => {
+    const candNorm    = l2norm(vec);
+    const candEmbNorm = l2norm(vec.slice(HC_DIMS, HC_DIMS + EMBED_DIMS));
+    const features    = rerankerFeatures(tasteVec, tasteNorm, tasteEmbNorm, vec, candNorm, candEmbNorm);
+    const rScore      = rerankerScore(features);
+    const cosScore    = 1 - rank / n; // 1.0 for first ANN result, approaching 0
+    return { name, score: BLEND * cosScore + (1 - BLEND) * rScore };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map(s => s.name);
+}
+
+// ── Origin filter ─────────────────────────────────────────────────────────────
 async function getOriginNames(origins: string[]): Promise<Set<string> | null> {
   if (origins.length === 0) return null;
   const results = await Promise.all(
-    origins.map((origin) =>
+    origins.map(origin =>
       ddb.send(new QueryCommand({
         TableName: TABLE,
         IndexName: ORIGIN_INDEX,
@@ -55,43 +244,10 @@ async function getOriginNames(origins: string[]): Promise<Set<string> | null> {
   return names;
 }
 
-// Aggregated subquery: one row per name with total count and female_pct
-// computed from 2025 popularity data.  Use as: JOIN (NP_AGG) np ON np.name = nv.name
-// This eliminates duplicate rows that arise when a name has both M and F entries
-// for the same year, and gives accurate female fractions for the sex filter.
-const NP_AGG = `(
-  SELECT name,
-         SUM(count)                                                               AS count,
-         SUM(CASE WHEN gender='F' THEN count ELSE 0 END)::float / NULLIF(SUM(count),0) AS female_pct
-  FROM   name_popularity WHERE year = 2025 GROUP BY name
-) np`;
-
-// SQL fragment: filter by 2025 total count based on selected popularity tiers.
-// Multiple tiers are OR-ed so e.g. ["familiar","unique"] excludes only "popular".
-function popularityClause(tiers: string[]): string {
-  if (tiers.length === 0 || tiers.length === 3) return '';
-  const conditions: string[] = [];
-  if (tiers.includes('popular'))  conditions.push('np.count >= 5000');
-  if (tiers.includes('familiar')) conditions.push('(np.count >= 1500 AND np.count < 5000)');
-  if (tiers.includes('unique'))   conditions.push('np.count < 1500');
-  return conditions.length ? `AND (${conditions.join(' OR ')})` : '';
-}
-
-// SQL fragment: filter by female_pct.  Requires the NP_AGG subquery to be joined
-// as "np".  Falls back to nv.female_pct then 0.5 for names not in 2025 data.
-function sexClause(sex: string | undefined): string {
-  const pct = `COALESCE(np.female_pct, nv.female_pct, 0.5)`;
-  if (sex === 'F') return `AND ${pct} >= ${SEX_FILTER_F}`;
-  if (sex === 'M') return `AND ${pct} <= ${SEX_FILTER_M}`;
-  if (sex === 'U') return `AND ${pct} > ${UNISEX_MIN} AND ${pct} < ${UNISEX_MAX}`;
-  return '';
-}
-
-// Schema migration — runs once per Lambda cold start, idempotent
+// ── Schema migration ───────────────────────────────────────────────────────────
 let schemaMigrated = false;
 async function ensureSchema(pool: ReturnType<typeof getPool>) {
   if (schemaMigrated) return;
-  // Run each migration step independently — a previously-applied step must not block later ones
   const run = async (sql: string) => { try { await pool.query(sql); } catch { /* already applied */ } };
 
   await run(`ALTER TABLE user_swipes ADD COLUMN IF NOT EXISTS sex_context TEXT`);
@@ -107,27 +263,28 @@ async function ensureSchema(pool: ReturnType<typeof getPool>) {
   await run(`ALTER TABLE user_taste DROP CONSTRAINT IF EXISTS user_taste_user_id_key`);
   await run(`ALTER TABLE user_taste ADD CONSTRAINT user_taste_user_id_ctx UNIQUE (user_id, sex_context)`);
 
-  // Ensure embedding is vector(564) — if wrong dimension, wipe stale taste data and retype
+  // Wipe and retype user_taste.embedding if dimension doesn't match new vectors
   await pool.query(`DO $$
     DECLARE col_type text;
     BEGIN
       SELECT pg_catalog.format_type(atttypid, atttypmod) INTO col_type
       FROM pg_attribute
       WHERE attrelid = 'user_taste'::regclass AND attname = 'embedding' AND NOT attisdropped;
-      IF col_type IS DISTINCT FROM 'vector(564)' THEN
+      IF col_type IS DISTINCT FROM 'vector(${VECTOR_DIM})' THEN
         TRUNCATE user_taste;
-        EXECUTE 'ALTER TABLE user_taste ALTER COLUMN embedding TYPE vector(564)';
+        EXECUTE 'ALTER TABLE user_taste ALTER COLUMN embedding TYPE vector(${VECTOR_DIM})';
       END IF;
     END $$`);
 
   schemaMigrated = true;
 }
 
+// ── Enrichment ────────────────────────────────────────────────────────────────
 async function enrichNames(names: string[], rankSex?: string) {
   if (names.length === 0) return [];
   const pool = getPool();
   const [batchResult, rankResult] = await Promise.all([
-    ddb.send(new BatchGetCommand({ RequestItems: { [TABLE]: { Keys: names.map((n) => ({ name: n })) } } })),
+    ddb.send(new BatchGetCommand({ RequestItems: { [TABLE]: { Keys: names.map(n => ({ name: n })) } } })),
     pool.query<{ name: string; gender: string; rank_2025: string; female_pct: string }>(
       `SELECT name, gender, rank_2025,
               female_count::float / NULLIF(total_count, 0) AS female_pct
@@ -141,6 +298,7 @@ async function enrichNames(names: string[], rankSex?: string) {
       [names],
     ),
   ]);
+
   const itemMap = new Map<string, Record<string, unknown>>();
   for (const item of (batchResult.Responses?.[TABLE] ?? []) as Record<string, unknown>[]) {
     itemMap.set(item.name as string, item);
@@ -151,17 +309,18 @@ async function enrichNames(names: string[], rankSex?: string) {
     rank2025Map.set(`${row.name}-${row.gender}`, Number(row.rank_2025));
     femalePctMap.set(row.name, Number(row.female_pct));
   }
+
   return names
-    .map((n) => {
+    .map(n => {
       const item = itemMap.get(n);
       if (!item) return null;
       const primarySex = item.sex as string;
-      const lookupSex = rankSex ?? primarySex;
-      const formatted = formatName(item);
+      const lookupSex  = rankSex ?? primarySex;
+      const formatted  = formatName(item);
       return {
         ...formatted,
-        female_pct: femalePctMap.has(n) ? femalePctMap.get(n)! : formatted.female_pct,
-        rank_2025: rank2025Map.get(`${n}-${lookupSex}`) ?? rank2025Map.get(`${n}-${primarySex}`) ?? null,
+        female_pct:  femalePctMap.has(n) ? femalePctMap.get(n)! : formatted.female_pct,
+        rank_2025:   rank2025Map.get(`${n}-${lookupSex}`) ?? rank2025Map.get(`${n}-${primarySex}`) ?? null,
       };
     })
     .filter(Boolean);
@@ -176,28 +335,28 @@ async function getPartnerDeviceId(listId: string, deviceId: string): Promise<str
   return null;
 }
 
-function parseVec(pgvecStr: string): number[] {
-  return pgvecStr.slice(1, -1).split(',').map(Number);
-}
+// ── Cold-start deck ───────────────────────────────────────────────────────────
+// Pre-computed diverse cold-start deck (k=10 clusters × 3 names, interleaved by cluster).
+// Regenerate with: python3 data/scripts/compute_cold_start.py
+const COLD_START_DECK: Record<'F' | 'M' | 'U', string[]> = {
+  F: ['Ailany','Josephine','Harper','Charlotte','Emma','Hazel','Sophia','Eleanor','Kennedy','Olivia','Leilani','Jade','Lily','Abigail','Amelia','Lainey','Isabella','Elizabeth','Rose','Evelyn','Ayla','Juniper','Nora','Adeline','Mia','Avery','Eliana','Penelope','Melanie','Violet'],
+  M: ['Mateo','Oliver','Elijah','Lucas','Liam','Alexander','Matthew','John','Ethan','Cooper','Santiago','Theodore','Elias','Luca','Noah','Jackson','Theo','Luke','Owen','Brooks','Anthony','Henry','Julian','Hudson','Levi','Maverick','Archer','Gael','Grayson','Colton'],
+  U: ['Riley','Jordan','Taylor','Quinn','Parker','Morgan','Avery','Charlie','Logan','Harper','Blake','Finley','Rowan','Emerson','Elliot','Hayden','Peyton','Cameron','Reese','Drew','Jamie','Skylar','Dakota','Scout','Sage','Ryan','Dylan','Casey','Marlowe','Sutton'],
+};
 
-function blendVecs(a: number[], b: number[]): string {
-  return `[${a.map((v, i) => 0.5 * v + 0.5 * b[i]).join(',')}]`;
-}
-
+// ── Main recommendation function ──────────────────────────────────────────────
 export async function getRecommendations(deviceId: string, params: Params) {
   const { sex, listId } = params;
-  const ctx = vSex(sex);
+  const ctx    = vSex(sex);
   const filter = sexClause(sex);
-  const excl = `AND nv.name NOT IN (SELECT name FROM user_swipes WHERE user_id = $1 AND sex_context = '${ctx}')`;
-  const pool = getPool();
+  const excl   = `AND nv.name NOT IN (SELECT name FROM user_swipes WHERE user_id = $1 AND sex_context = '${ctx}')`;
+  const pool   = getPool();
 
-  const popularityTiers = params.popularity ? params.popularity.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const popularityTiers = params.popularity ? params.popularity.split(',').map(s => s.trim()).filter(Boolean) : [];
   const popFilter = popularityClause(popularityTiers);
 
-  const origins = params.origins ? params.origins.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const origins   = params.origins ? params.origins.split(',').map(s => s.trim()).filter(Boolean) : [];
   const originSet = await getOriginNames(origins);
-  // When origins are requested, add a parameter to restrict to those names.
-  // Each query appends originNames as its last $N parameter.
   const originArr = originSet ? [...originSet] : null;
   const originSql = (nextIdx: number) => originArr ? ` AND nv.name = ANY($${nextIdx}::text[])` : '';
 
@@ -209,50 +368,90 @@ export async function getRecommendations(deviceId: string, params: Params) {
     listId ? getPartnerDeviceId(listId, deviceId) : Promise.resolve(null),
   ]);
 
-  // Resolve query vector: user's taste, optionally blended with partner's
-  let queryVec: string | null = null;
+  // Resolve primary taste vector (for reranker features) and ANN query vec
+  let tasteVec: number[] | null = null;
+  let queryVec: string | null   = null;
+
   if (tasteResult.rows.length > 0) {
-    const userVec = parseVec(tasteResult.rows[0].embedding as unknown as string);
+    tasteVec = parseVec(tasteResult.rows[0].embedding as unknown as string);
     if (partnerDeviceId) {
       const partnerTaste = await pool.query<{ embedding: string }>(
         `SELECT embedding FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}'`,
         [partnerDeviceId],
       );
-      if (partnerTaste.rows.length > 0) {
-        const partnerVec = parseVec(partnerTaste.rows[0].embedding as unknown as string);
-        queryVec = blendVecs(userVec, partnerVec);
-      } else {
-        queryVec = `[${userVec.join(',')}]`;
-      }
+      queryVec = partnerTaste.rows.length > 0
+        ? blendVecs(tasteVec, parseVec(partnerTaste.rows[0].embedding as unknown as string))
+        : vecToStr(tasteVec);
     } else {
-      queryVec = `[${userVec.join(',')}]`;
+      queryVec = vecToStr(tasteVec);
     }
   }
 
   let names: string[];
 
-  if (queryVec !== null) {
+  if (queryVec !== null && tasteVec !== null) {
     const likedCount = tasteResult.rows[0].liked_count ?? 0;
 
-    const simWeight = likedCount < 3 ? 0 : Math.min(1, (likedCount - 3) / 7);
+    const simWeight            = likedCount < 3 ? 0 : Math.min(1, (likedCount - 3) / 7);
     const actualSimilaritySize = Math.round(SIMILARITY_SIZE * simWeight);
-    const extraSlots = SIMILARITY_SIZE - actualSimilaritySize;
-    const actualPopularSize = POPULAR_SIZE + Math.round(extraSlots * 0.5);
+    const extraSlots           = SIMILARITY_SIZE - actualSimilaritySize;
+    const actualPopularSize    = POPULAR_SIZE     + Math.round(extraSlots * 0.5);
     const actualExplorationSize = EXPLORATION_SIZE + (extraSlots - Math.round(extraSlots * 0.5));
 
+    // ── Determine query vectors (k-means multi-vector or single) ──────────────
+    const k = likedCount >= CLUSTER_K_HIGH_THRESHOLD ? 3
+            : likedCount >= CLUSTER_MIN_LIKES         ? 2
+            : 1;
+
+    let annQueryVecs: string[];
+
+    if (k > 1) {
+      const likedVecResult = await pool.query<{ embedding: string }>(
+        `SELECT nv.embedding
+         FROM user_swipes us JOIN name_vectors nv ON us.name = nv.name
+         WHERE us.user_id = $1 AND us.liked = true AND us.sex_context = '${ctx}'`,
+        [deviceId],
+      );
+      const likedVecs = likedVecResult.rows.map(r => parseVec(r.embedding as unknown as string));
+      if (likedVecs.length >= k) {
+        // Use the closest actual liked name to each centroid rather than the centroid
+        // itself — averaging destroys style signal (e.g. Stella's vintage cluster
+        // collapses into generic popular names when blended with Luna/Nova).
+        const centroids = kmeanspp(likedVecs, k);
+        annQueryVecs = centroids.map(centroid => {
+          let best = likedVecs[0];
+          let bestDist = sqDist(likedVecs[0], centroid);
+          for (const v of likedVecs) {
+            const d = sqDist(v, centroid);
+            if (d < bestDist) { bestDist = d; best = v; }
+          }
+          return vecToStr(best);
+        });
+      } else {
+        annQueryVecs = [queryVec];
+      }
+    } else {
+      annQueryVecs = [queryVec];
+    }
+
     const tQueries = Date.now();
-    const [similarityResult, explorationResult, popularResult] = await Promise.all([
+
+    // ── ANN retrieval: K=100 per centroid, plus exploration and popular ───────
+    const annQueries = annQueryVecs.map(qv =>
       actualSimilaritySize > 0
-        ? pool.query<{ name: string }>(
-            `SELECT nv.name
+        ? pool.query<{ name: string; embedding: string }>(
+            `SELECT nv.name, nv.embedding
              FROM   name_vectors nv
              JOIN   ${NP_AGG} ON np.name = nv.name
              WHERE  1=1 ${excl} ${filter} ${popFilter}${originSql(3)}
              ORDER  BY nv.embedding <=> $2::vector
              LIMIT  $3`,
-            originArr ? [deviceId, queryVec, SIMILARITY_POOL, originArr] : [deviceId, queryVec, SIMILARITY_POOL],
+            originArr ? [deviceId, qv, RETRIEVAL_K, originArr] : [deviceId, qv, RETRIEVAL_K],
           )
-        : Promise.resolve({ rows: [] }),
+        : Promise.resolve({ rows: [] as { name: string; embedding: string }[] }),
+    );
+
+    const [explorationResult, popularResult, ...annResults] = await Promise.all([
       pool.query<{ name: string }>(
         `SELECT nv.name
          FROM   name_vectors nv
@@ -262,7 +461,9 @@ export async function getRecommendations(deviceId: string, params: Params) {
          AND    np.count < $4${originSql(6)}
          ORDER  BY nv.embedding <=> $2::vector
          LIMIT  $5`,
-        originArr ? [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize, originArr] : [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize],
+        originArr
+          ? [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize, originArr]
+          : [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize],
       ),
       pool.query<{ name: string }>(
         `SELECT nv.name
@@ -273,49 +474,75 @@ export async function getRecommendations(deviceId: string, params: Params) {
          LIMIT  $2`,
         originArr ? [deviceId, POPULAR_POOL, originArr] : [deviceId, POPULAR_POOL],
       ),
+      ...annQueries,
     ]);
 
-    console.log(JSON.stringify({ event: 'rec_queries', duration_ms: Date.now() - tQueries, liked_count: likedCount, sim_weight: simWeight, partner_blended: !!partnerDeviceId, counts: { similarity: similarityResult.rows.length, exploration: explorationResult.rows.length, popular: popularResult.rows.length } }));
+    console.log(JSON.stringify({
+      event: 'rec_queries', duration_ms: Date.now() - tQueries,
+      liked_count: likedCount, k, blend: BLEND,
+      partner_blended: !!partnerDeviceId,
+      counts: {
+        ann_per_centroid: annResults.map(r => r.rows.length),
+        exploration: explorationResult.rows.length,
+        popular: popularResult.rows.length,
+      },
+    }));
 
-    const pool60 = similarityResult.rows.map((r: { name: string }) => r.name);
-    for (let i = pool60.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [pool60[i], pool60[j]] = [pool60[j], pool60[i]];
+    // ── Round-robin interleave ANN results from all centroids ─────────────────
+    const annPool: Array<{ name: string; vec: number[] }> = [];
+    const annSeen = new Set<string>();
+    const maxLen  = Math.max(...annResults.map(r => r.rows.length), 0);
+    for (let i = 0; i < maxLen; i++) {
+      for (const result of annResults) {
+        if (i < result.rows.length) {
+          const row = result.rows[i];
+          if (!annSeen.has(row.name)) {
+            annSeen.add(row.name);
+            annPool.push({ name: row.name, vec: parseVec(row.embedding as unknown as string) });
+          }
+        }
+      }
     }
-    const similarityNames = pool60.slice(0, actualSimilaritySize);
+
+    // ── Rerank ANN pool with GBC (blended with cosine rank position) ──────────
+    const reranked = rerankPool(annPool, tasteVec);
+    const similarityNames = reranked.slice(0, actualSimilaritySize);
     const seen = new Set(similarityNames);
 
+    // ── Exploration bucket (unchanged) ────────────────────────────────────────
     const explorationNames = explorationResult.rows
       .map((r: { name: string }) => r.name)
       .filter((n: string) => !seen.has(n));
     explorationNames.forEach((n: string) => seen.add(n));
 
-    const popularPool = popularResult.rows.map((r: { name: string }) => r.name).filter((n: string) => !seen.has(n));
+    // ── Popular bucket: random shuffle for variety ────────────────────────────
+    const popularPool = popularResult.rows
+      .map((r: { name: string }) => r.name)
+      .filter((n: string) => !seen.has(n));
     for (let i = popularPool.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [popularPool[i], popularPool[j]] = [popularPool[j], popularPool[i]];
     }
     const popularNames = popularPool.slice(0, actualPopularSize);
 
+    // ── Merge and light shuffle ───────────────────────────────────────────────
     const merged = [...similarityNames, ...explorationNames, ...popularNames];
     for (let i = merged.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [merged[i], merged[j]] = [merged[j], merged[i]];
     }
     names = merged;
-  } else {
-    // Cold start: per-context deck, excluding names already swiped in this context
-    const deck = COLD_START_DECK[ctx];
 
+  } else {
+    // ── Cold start ─────────────────────────────────────────────────────────────
+    const deck = COLD_START_DECK[ctx];
     const swipedResult = await pool.query<{ name: string }>(
       `SELECT name FROM user_swipes WHERE user_id = $1 AND sex_context = '${ctx}'`,
       [deviceId],
     );
     const swiped = new Set(swipedResult.rows.map((r: { name: string }) => r.name));
-    // Skip the in-memory deck when a popularity filter is active — deck names are
-    // all popular, so they would incorrectly survive a "unique" filter.
     names = popularityTiers.length === 0
-      ? deck.filter((n) => !swiped.has(n) && (!originSet || originSet.has(n)))
+      ? deck.filter(n => !swiped.has(n) && (!originSet || originSet.has(n)))
             .slice(0, SIMILARITY_SIZE + EXPLORATION_SIZE + POPULAR_SIZE)
       : [];
 
@@ -323,21 +550,23 @@ export async function getRecommendations(deviceId: string, params: Params) {
       const { rows } = await pool.query<{ name: string }>(
         `SELECT nv.name FROM name_vectors nv
          JOIN ${NP_AGG} ON np.name = nv.name
-         WHERE 1=1 ${excl} ${filter} ${popFilter}${originSql(3)} ORDER BY np.count DESC LIMIT $2`,
+         WHERE 1=1 ${excl} ${filter} ${popFilter}${originSql(3)}
+         ORDER BY np.count DESC LIMIT $2`,
         originArr ? [deviceId, COLD_START_LIMIT, originArr] : [deviceId, COLD_START_LIMIT],
       );
-      names = rows.slice(0, SIMILARITY_SIZE + EXPLORATION_SIZE + POPULAR_SIZE).map((r: { name: string }) => r.name);
+      names = rows.slice(0, SIMILARITY_SIZE + EXPLORATION_SIZE + POPULAR_SIZE)
+                  .map((r: { name: string }) => r.name);
     }
   }
 
-  // Deduplicate before enrichNames — DynamoDB BatchGet rejects duplicate keys.
   const uniqueNames = [...new Set(names)];
   return ok({ names: await enrichNames(uniqueNames, sex) });
 }
 
+// ── Swipe recording (unchanged) ───────────────────────────────────────────────
 export async function getUserSwipes(deviceId: string, liked: boolean, sex?: string) {
   const pool = getPool();
-  const ctx = sex && ['F', 'M', 'U'].includes(sex) ? sex : null;
+  const ctx  = sex && ['F', 'M', 'U'].includes(sex) ? sex : null;
   const { rows } = await pool.query<{ name: string }>(
     ctx
       ? `SELECT name FROM user_swipes WHERE user_id = $1 AND liked = $2 AND sex_context = $3 ORDER BY swiped_at DESC`
@@ -348,13 +577,11 @@ export async function getUserSwipes(deviceId: string, liked: boolean, sex?: stri
 }
 
 export async function recordSwipe(deviceId: string, body: Record<string, unknown>) {
-  const name = body.name as string | undefined;
-  const liked = body.liked;
+  const name        = body.name as string | undefined;
+  const liked       = body.liked;
   const sex_context = vSex(body.sex_context as string | undefined);
 
-  if (!name || typeof liked !== 'boolean') {
-    return err(400, 'name and liked (boolean) are required');
-  }
+  if (!name || typeof liked !== 'boolean') return err(400, 'name and liked (boolean) are required');
 
   const pool = getPool();
   await ensureSchema(pool);
@@ -363,23 +590,17 @@ export async function recordSwipe(deviceId: string, body: Record<string, unknown
     'SELECT embedding FROM name_vectors WHERE name = $1',
     [name],
   );
-  if (vectorResult.rows.length === 0) {
-    return err(404, `name not found: ${name}`);
-  }
-  // Parse pgvector string "[0.1,0.2,...]" → number[]
-  const nameVec: number[] = (vectorResult.rows[0].embedding as unknown as string)
-    .slice(1, -1).split(',').map(Number);
+  if (vectorResult.rows.length === 0) return err(404, `name not found: ${name}`);
 
-  // Per-context swipe record — same name can be swiped in multiple sex contexts
+  const nameVec = parseVec(vectorResult.rows[0].embedding as unknown as string);
+  const weight  = liked ? 1.0 : -0.5;
+
   await pool.query(
     `INSERT INTO user_swipes (user_id, name, liked, sex_context)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (user_id, name, sex_context) DO UPDATE SET liked = EXCLUDED.liked, swiped_at = NOW()`,
     [deviceId, name, liked, sex_context],
   );
-
-  // Compute updated taste vector in JS — pgvector doesn't support vector * scalar
-  const weight = liked ? 1.0 : -0.5;
 
   const tasteRow = await pool.query<{ embedding: string; liked_count: number; disliked_count: number }>(
     'SELECT embedding, liked_count, disliked_count FROM user_taste WHERE user_id = $1 AND sex_context = $2',
@@ -391,19 +612,17 @@ export async function recordSwipe(deviceId: string, body: Record<string, unknown
   let newDisliked: number;
 
   if (tasteRow.rows.length === 0) {
-    newVec = nameVec.map((v) => v * weight);
-    newLiked = liked ? 1 : 0;
+    newVec = nameVec.map(v => v * weight);
+    newLiked    = liked ? 1 : 0;
     newDisliked = liked ? 0 : 1;
   } else {
-    const row = tasteRow.rows[0];
-    const curVec: number[] = (row.embedding as unknown as string).slice(1, -1).split(',').map(Number);
-    const total = row.liked_count + row.disliked_count;
-    newVec = curVec.map((v, i) => (v * total + nameVec[i] * weight) / (total + 1));
-    newLiked = row.liked_count + (liked ? 1 : 0);
+    const row    = tasteRow.rows[0];
+    const curVec = parseVec(row.embedding as unknown as string);
+    const total  = row.liked_count + row.disliked_count;
+    newVec      = curVec.map((v, i) => (v * total + nameVec[i] * weight) / (total + 1));
+    newLiked    = row.liked_count    + (liked ? 1 : 0);
     newDisliked = row.disliked_count + (liked ? 0 : 1);
   }
-
-  const embeddingStr = `[${newVec.join(',')}]`;
 
   await pool.query(
     `INSERT INTO user_taste (user_id, sex_context, embedding, liked_count, disliked_count, updated_at)
@@ -413,7 +632,7 @@ export async function recordSwipe(deviceId: string, body: Record<string, unknown
        liked_count    = EXCLUDED.liked_count,
        disliked_count = EXCLUDED.disliked_count,
        updated_at     = NOW()`,
-    [deviceId, sex_context, embeddingStr, newLiked, newDisliked],
+    [deviceId, sex_context, vecToStr(newVec), newLiked, newDisliked],
   );
 
   return ok({ ok: true });

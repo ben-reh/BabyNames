@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -239,12 +240,67 @@ export class BabyNamesStack extends cdk.Stack {
     listNames.addMethod('POST', integration);
     listNames.addResource('{name}').addMethod('DELETE', integration);
 
+    // /auth routes
+    const auth = api.root.addResource('auth');
+    auth.addResource('migrate').addMethod('POST', integration);
+
+    // --- Cognito User Pool ---
+    const userPool = new cognito.UserPool(this, 'BabyNamesUserPool', {
+      userPoolName: 'BabyNamesUserPool',
+      selfSignUpEnabled: true,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: false,
+        requireUppercase: false,
+        requireDigits: false,
+        requireSymbols: false,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // App Client (email/password only for now — Apple/Google IdPs added when credentials ready)
+    // To add social login: update babynames/social-auth in Secrets Manager with real
+    // credentials, then add AppleIdp + GoogleIdp resources and include them in supportedIdentityProviders.
+    const userPoolClient = new cognito.UserPoolClient(this, 'BabyNamesAppClient', {
+      userPool,
+      userPoolClientName: 'BabyNamesApp',
+      generateSecret: false,
+      authFlows: {
+        userSrp: true,      // secure password auth from mobile
+        userPassword: true, // fallback for SDK compatibility
+      },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.PROFILE,
+        ],
+        callbackUrls: ['babynames://auth/callback'],
+        logoutUrls:   ['babynames://auth/logout'],
+      },
+      supportedIdentityProviders: [
+        cognito.UserPoolClientIdentityProvider.COGNITO,
+      ],
+    });
+
+    // Hosted UI domain — required for social login OAuth redirect handling
+    const cognitoDomain = userPool.addDomain('BabyNamesDomain', {
+      cognitoDomain: { domainPrefix: 'babynames-auth' },
+    });
+
     // --- Outputs ---
-    new cdk.CfnOutput(this, 'ApiUrl',          { value: api.url });
-    new cdk.CfnOutput(this, 'NamesTableName',  { value: namesTable.tableName });
-    new cdk.CfnOutput(this, 'ListsTableName',  { value: listsTable.tableName });
-    new cdk.CfnOutput(this, 'DataBucketName',  { value: dataBucket.bucketName });
-    new cdk.CfnOutput(this, 'DbEndpoint',      { value: db.instanceEndpoint.hostname });
-    new cdk.CfnOutput(this, 'DbSecretArn',     { value: dbSecret.secretArn });
+    new cdk.CfnOutput(this, 'ApiUrl',            { value: api.url });
+    new cdk.CfnOutput(this, 'NamesTableName',    { value: namesTable.tableName });
+    new cdk.CfnOutput(this, 'ListsTableName',    { value: listsTable.tableName });
+    new cdk.CfnOutput(this, 'DataBucketName',    { value: dataBucket.bucketName });
+    new cdk.CfnOutput(this, 'DbEndpoint',        { value: db.instanceEndpoint.hostname });
+    new cdk.CfnOutput(this, 'DbSecretArn',       { value: dbSecret.secretArn });
+    new cdk.CfnOutput(this, 'UserPoolId',        { value: userPool.userPoolId });
+    new cdk.CfnOutput(this, 'UserPoolClientId',  { value: userPoolClient.userPoolClientId });
+    new cdk.CfnOutput(this, 'CognitoDomain',     { value: cognitoDomain.baseUrl() });
   }
 }

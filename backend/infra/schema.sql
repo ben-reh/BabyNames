@@ -3,10 +3,10 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- Drop and recreate name_vectors on each pipeline run (pipeline-owned data).
 DROP TABLE IF EXISTS name_vectors CASCADE;
 
--- 564 dimensions (52 hand-crafted + 512 OpenAI) — see data/scripts/compute_vectors.py for layout.
+-- 567 dimensions (55 hand-crafted + 512 OpenAI text-embedding-3-large) — see data/scripts/compute_vectors.py for layout.
 CREATE TABLE name_vectors (
     name        TEXT PRIMARY KEY,
-    embedding   vector(564) NOT NULL,
+    embedding   vector(567) NOT NULL,
     female_pct  FLOAT NOT NULL DEFAULT 0.5
 );
 
@@ -19,7 +19,7 @@ CREATE INDEX name_vectors_embedding_idx
 -- Per-user taste vector, updated on every swipe.
 CREATE TABLE IF NOT EXISTS user_taste (
     user_id         TEXT PRIMARY KEY,
-    embedding       vector(564) NOT NULL,
+    embedding       vector(567) NOT NULL,
     liked_count     INT NOT NULL DEFAULT 0,
     disliked_count  INT NOT NULL DEFAULT 0,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
