@@ -128,7 +128,10 @@ export default function SwipeScreen() {
         const preserved = prev.slice(0, pos + 3); // protect current + 2 stacked cards
         const preservedNames = new Set(preserved.map((n) => n.name));
         const tail = allNames.filter((n) => !preservedNames.has(n.name));
-        return [...preserved, ...tail];
+        const next = [...preserved, ...tail];
+        // Avoid a new array reference (and Swiper re-render) if nothing actually changed.
+        if (next.length === prev.length && next.every((n, i) => n.name === prev[i].name)) return prev;
+        return next;
       });
     }
   }, [filterKey, data]);
