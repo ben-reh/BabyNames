@@ -48,13 +48,6 @@ export default function TabsLayout() {
             tabBarIcon: ({ color, size }) => <Ionicons name="heart" size={size} color={color} />,
           }}
         />
-<Tabs.Screen
-          name="my-list"
-          options={{
-            title: 'My Lists',
-            tabBarIcon: ({ color, size }) => <Ionicons name="bookmark" size={size} color={color} />,
-          }}
-        />
         <Tabs.Screen
           name="rankings"
           options={{
@@ -63,10 +56,17 @@ export default function TabsLayout() {
           }}
         />
         <Tabs.Screen
+          name="my-list"
+          options={{
+            title: 'My Lists',
+            tabBarIcon: ({ color, size }) => <Ionicons name="bookmark" size={size} color={color} />,
+          }}
+        />
+        <Tabs.Screen
           name="chat"
           options={{
-            title: 'Ask AI',
-            tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" size={size} color={color} />,
+            title: 'Brainstorm',
+            tabBarIcon: ({ color, size }) => <Ionicons name="cloud" size={size} color={color} />,
           }}
         />
         <Tabs.Screen
