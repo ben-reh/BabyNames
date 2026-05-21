@@ -138,8 +138,10 @@ interface ConsultantSession {
 interface ConsultantStoreState {
   session: ConsultantSession | null;
   vibeText: string;
+  sex: 'F' | 'U' | 'M';
   setSession: (session: Omit<ConsultantSession, 'generatedAt'>) => void;
   setVibeText: (text: string) => void;
+  setSex: (sex: 'F' | 'U' | 'M') => void;
   clearSession: () => void;
 }
 
@@ -148,8 +150,10 @@ export const useConsultantStore = create<ConsultantStoreState>()(
     (set) => ({
       session: null,
       vibeText: '',
+      sex: 'F',
       setSession: (s) => set({ session: { ...s, generatedAt: Date.now() } }),
       setVibeText: (text) => set({ vibeText: text }),
+      setSex: (sex) => set({ sex }),
       clearSession: () => set({ session: null }),
     }),
     { name: 'consultant', storage: createJSONStorage(() => AsyncStorage) },

@@ -129,7 +129,7 @@ function NameRow({
 export default function ConsultantScreen() {
   const router = useRouter();
   const { deviceId, listId } = useSessionStore();
-  const { session, vibeText, setSession, setVibeText } = useConsultantStore();
+  const { session, vibeText, sex, setSession, setVibeText, setSex } = useConsultantStore();
   const [phase, setPhase] = useState<Phase>(session ? 'results' : 'idle');
   const [votes, setVotes] = useState<Record<string, 'like' | 'pass'>>({});
   const inputRef = useRef<TextInput>(null);
@@ -148,7 +148,7 @@ export default function ConsultantScreen() {
     if (!deviceId) return;
     setPhase('loading');
     generateSession(
-      { deviceId, listId: listId ?? undefined, vibeText: vibeText || undefined },
+      { deviceId, listId: listId ?? undefined, vibeText: vibeText || undefined, sex },
       {
         onSuccess: (data) => {
           setSession(data);
@@ -178,9 +178,22 @@ export default function ConsultantScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <View style={styles.headerTitleRow}>
-          <Ionicons name="person" size={18} color={colors.primary} />
-          <Text style={styles.headerTitle}>Your Name Consultant</Text>
+        <View style={styles.headerTopRow}>
+          <View style={styles.headerTitleRow}>
+            <Ionicons name="person" size={18} color={colors.primary} />
+            <Text style={styles.headerTitle}>Your Name Consultant</Text>
+          </View>
+          <View style={styles.sexToggle}>
+            {([['F', '♀ Girl'], ['U', 'Unisex'], ['M', '♂ Boy']] as ['F' | 'U' | 'M', string][]).map(([val, label]) => (
+              <TouchableOpacity
+                key={val}
+                style={[styles.sexSegment, sex === val && styles.sexSegmentActive]}
+                onPress={() => setSex(val)}
+              >
+                <Text style={[styles.sexSegmentText, sex === val && styles.sexSegmentTextActive]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
         <Text style={styles.headerSubtitle}>Personalized picks, just for you</Text>
       </View>
@@ -280,14 +293,24 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
     backgroundColor: colors.card,
   },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
   headerTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    marginBottom: 2,
   },
   headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
   headerSubtitle: { fontSize: fontSize.xs, color: colors.textMuted },
+  sexToggle: { flexDirection: 'row', backgroundColor: colors.border, borderRadius: radius.full, padding: 2 },
+  sexSegment: { paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.full },
+  sexSegmentActive: { backgroundColor: colors.card },
+  sexSegmentText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textMuted },
+  sexSegmentTextActive: { color: colors.text },
 
   listContent: { padding: spacing.md, paddingBottom: spacing.xxl, gap: spacing.md },
 

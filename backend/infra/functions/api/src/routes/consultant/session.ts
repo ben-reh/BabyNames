@@ -6,10 +6,25 @@ import { ok, err } from '../../utils';
 import { buildProfileSummaryPrompt, buildVibeTranslationPrompt, buildNameDescriptionsPrompt } from './prompts';
 
 const LISTS_TABLE = 'Lists';
-const MODEL_ID = process.env.BEDROCK_MODEL_ID ?? 'anthropic.claude-3-5-sonnet-20241022-v2:0';
+const MODEL_SUMMARY     = 'anthropic.claude-3-5-sonnet-20241022-v2:0'; // profile prose — quality matters
+const MODEL_VIBE        = 'amazon.nova-micro-v1:0';                    // JSON extraction only
+const MODEL_DESCRIPTIONS = 'anthropic.claude-3-haiku-20240307-v1:0';  // personalized copy, high volume
 const RESULT_SIZE = 15;
 
-const NP_AGG = `(SELECT name, SUM(count) AS count FROM name_popularity WHERE year = 2025 GROUP BY name) np`;
+const UNISEX_MIN = 0.05;
+const UNISEX_MAX = 0.95;
+const SEX_FILTER_F = 0.05;
+const SEX_FILTER_M = 0.95;
+
+const NP_AGG = `(SELECT name, SUM(count) AS count, SUM(CASE WHEN gender='F' THEN count ELSE 0 END)::float / NULLIF(SUM(count),0) AS female_pct FROM name_popularity WHERE year = 2025 GROUP BY name) np`;
+
+function sexClause(sex: string | undefined): string {
+  const pct = `COALESCE(np.female_pct, nv.female_pct, 0.5)`;
+  if (sex === 'F') return `AND ${pct} >= ${SEX_FILTER_F}`;
+  if (sex === 'M') return `AND ${pct} <= ${SEX_FILTER_M}`;
+  if (sex === 'U') return `AND ${pct} > ${UNISEX_MIN} AND ${pct} < ${UNISEX_MAX}`;
+  return '';
+}
 
 interface VibeAdjustments {
   originBoosts: string[];
@@ -30,9 +45,9 @@ const bedrock = new BedrockRuntimeClient({
   region: process.env.BEDROCK_REGION ?? process.env.AWS_REGION,
 });
 
-async function callClaude(system: string, user: string, maxTokens: number): Promise<string> {
+async function callModel(modelId: string, system: string, user: string, maxTokens: number): Promise<string> {
   const response = await bedrock.send(new ConverseCommand({
-    modelId: MODEL_ID,
+    modelId,
     system: [{ text: system }],
     messages: [{ role: 'user', content: [{ text: user }] }],
     inferenceConfig: { maxTokens },
@@ -93,6 +108,8 @@ export async function consultantSession(body: Record<string, unknown>) {
   const deviceId = body.deviceId as string | undefined;
   const listId = body.listId as string | undefined;
   const vibeText = (body.vibeText as string | undefined)?.trim();
+  const sex = body.sex as string | undefined;
+  const sexCtx = (sex === 'F' || sex === 'M' || sex === 'U') ? sex : 'U';
 
   if (!deviceId) return err(400, 'deviceId is required');
 
@@ -101,16 +118,16 @@ export async function consultantSession(body: Record<string, unknown>) {
   // --- 1. Fetch taste context ---
   const [tasteResult, likedSwipesResult, passedSwipesResult] = await Promise.all([
     pool.query<{ embedding: string; liked_count: number; disliked_count: number }>(
-      'SELECT embedding, liked_count, disliked_count FROM user_taste WHERE user_id = $1 ORDER BY liked_count DESC LIMIT 1',
-      [deviceId],
+      'SELECT embedding, liked_count, disliked_count FROM user_taste WHERE user_id = $1 AND sex_context = $2',
+      [deviceId, sexCtx],
     ),
     pool.query<{ name: string }>(
-      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true ORDER BY swiped_at DESC LIMIT 50',
-      [deviceId],
+      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true AND sex_context = $2 ORDER BY swiped_at DESC LIMIT 50',
+      [deviceId, sexCtx],
     ),
     pool.query<{ name: string }>(
-      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = false ORDER BY swiped_at DESC LIMIT 5',
-      [deviceId],
+      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = false AND sex_context = $2 ORDER BY swiped_at DESC LIMIT 50',
+      [deviceId, sexCtx],
     ),
   ]);
 
@@ -134,8 +151,8 @@ export async function consultantSession(body: Record<string, unknown>) {
           : list.partnerA?.deviceId;
       if (!partnerDeviceId) return null;
       const { rows } = await pool.query<{ name: string }>(
-        'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true ORDER BY swiped_at DESC LIMIT 8',
-        [partnerDeviceId],
+        'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true AND sex_context = $2 ORDER BY swiped_at DESC LIMIT 8',
+        [partnerDeviceId, sexCtx],
       );
       return rows.map((r) => r.name);
     })(),
@@ -162,7 +179,7 @@ export async function consultantSession(body: Record<string, unknown>) {
   let partnerSummary: string | null = null;
 
   if (likedNames.length > 0 || passedNames.length > 0) {
-    const rawSummary = await callClaude(profileSystem, profileUser, 200);
+    const rawSummary = await callModel(MODEL_SUMMARY, profileSystem, profileUser, 200);
     if (partnerLikedMeta && partnerLikedMeta.length > 0) {
       const sentences = rawSummary.split(/(?<=[.!?])\s+/);
       if (sentences.length >= 2) {
@@ -186,7 +203,7 @@ export async function consultantSession(body: Record<string, unknown>) {
 
   if (vibeText) {
     const { vibeSystem, vibeUser } = buildVibeTranslationPrompt({ vibeText, profileSummary });
-    const vibeRaw = await callClaude(vibeSystem, vibeUser, 300);
+    const vibeRaw = await callModel(MODEL_VIBE, vibeSystem, vibeUser, 300);
     const parsed = parseJsonSafe<VibeAdjustments>(vibeRaw);
     if (parsed) vibeAdjustments = { ...vibeAdjustments, ...parsed };
   }
@@ -212,6 +229,7 @@ export async function consultantSession(body: Record<string, unknown>) {
 
   const originSql = (idx: number) =>
     originArr ? `AND nv.name = ANY($${idx}::text[])` : '';
+  const sexFilter = sexClause(sex);
 
   let retrievedNames: string[];
 
@@ -224,6 +242,7 @@ export async function consultantSession(body: Record<string, unknown>) {
        JOIN   ${NP_AGG} ON np.name = nv.name
        WHERE  nv.name NOT IN (SELECT name FROM user_swipes WHERE user_id = $1)
        ${popularityFilter}
+       ${sexFilter}
        ${originSql(3)}
        ORDER  BY nv.embedding <=> $2::vector
        LIMIT  ${RESULT_SIZE}`,
@@ -239,6 +258,7 @@ export async function consultantSession(body: Record<string, unknown>) {
        JOIN   ${NP_AGG} ON np.name = nv.name
        WHERE  nv.name NOT IN (SELECT name FROM user_swipes WHERE user_id = $1)
        ${popularityFilter}
+       ${sexFilter}
        ${originSql(2)}
        ORDER  BY np.count DESC
        LIMIT  ${RESULT_SIZE}`,
@@ -265,7 +285,7 @@ export async function consultantSession(body: Record<string, unknown>) {
     nameList: nameListText,
   });
 
-  const descriptionsRaw = await callClaude(descSystem, descUser, 700);
+  const descriptionsRaw = await callModel(MODEL_DESCRIPTIONS, descSystem, descUser, 700);
   const descriptions =
     parseJsonSafe<{ name: string; description: string }[]>(descriptionsRaw) ?? [];
   const descMap = new Map(descriptions.map((d) => [d.name, d.description]));

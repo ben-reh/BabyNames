@@ -18,6 +18,7 @@ interface ConsultantSessionRequest {
   deviceId: string;
   listId?: string;
   vibeText?: string;
+  sex?: string;
 }
 
 interface ConsultantFeedbackRequest {
