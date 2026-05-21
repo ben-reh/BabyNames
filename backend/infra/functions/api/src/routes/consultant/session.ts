@@ -52,10 +52,16 @@ function parseJsonSafe<T>(text: string): T | null {
 
 async function getNamesMeta(names: string[]): Promise<NameMeta[]> {
   if (names.length === 0) return [];
-  const result = await ddb.send(new BatchGetCommand({
-    RequestItems: { [TABLE]: { Keys: names.map((n) => ({ name: n })) } },
-  }));
-  return ((result.Responses?.[TABLE] ?? []) as Record<string, unknown>[]).map((item) => ({
+  const CHUNK = 100;
+  const chunks: string[][] = [];
+  for (let i = 0; i < names.length; i += CHUNK) chunks.push(names.slice(i, i + CHUNK));
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      ddb.send(new BatchGetCommand({ RequestItems: { [TABLE]: { Keys: chunk.map((n) => ({ name: n })) } } })),
+    ),
+  );
+  const items = results.flatMap((r) => (r.Responses?.[TABLE] ?? []) as Record<string, unknown>[]);
+  return items.map((item) => ({
     name: item.name as string,
     sex: (item.sex as string) ?? 'U',
     origin: (item.origin as string) || null,
@@ -99,7 +105,7 @@ export async function consultantSession(body: Record<string, unknown>) {
       [deviceId],
     ),
     pool.query<{ name: string }>(
-      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true ORDER BY swiped_at DESC LIMIT 10',
+      'SELECT name FROM user_swipes WHERE user_id = $1 AND liked = true ORDER BY swiped_at DESC LIMIT 50',
       [deviceId],
     ),
     pool.query<{ name: string }>(
