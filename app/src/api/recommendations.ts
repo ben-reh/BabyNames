@@ -13,13 +13,13 @@ interface RecommendationsFilters {
 export function useInfiniteRecommendations(filters: RecommendationsFilters) {
   return useInfiniteQuery({
     queryKey: ['recommendations', filters.deviceId, filters.listId, filters.sex, filters.origins, filters.popularity],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const params: Record<string, string> = { deviceId: filters.deviceId };
       if (filters.listId) params.listId = filters.listId;
       if (filters.sex) params.sex = filters.sex;
       if (filters.origins?.length) params.origins = filters.origins.join(',');
       if (filters.popularity?.length) params.popularity = filters.popularity.join(',');
-      const { data } = await api.get<{ names: Name[] }>('/recommendations', { params });
+      const { data } = await api.get<{ names: Name[] }>('/recommendations', { params, signal });
       return data;
     },
     initialPageParam: 0,
