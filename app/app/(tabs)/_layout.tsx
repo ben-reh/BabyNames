@@ -76,7 +76,13 @@ export default function TabsLayout() {
             tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" size={size} color={color} />,
           }}
         />
-        <Tabs.Screen name="profile" options={{ href: null }} />
+        <Tabs.Screen
+          name="profile"
+          options={__DEV__ ? {
+            title: 'Dev',
+            tabBarIcon: ({ color, size }) => <Ionicons name="construct" size={size} color={color} />,
+          } : { href: null }}
+        />
       </Tabs>
       <MatchBanner />
     </View>

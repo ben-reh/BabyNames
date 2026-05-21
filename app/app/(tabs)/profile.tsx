@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useState } from 'react';
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useAuth } from '../../src/hooks/useAuth';
-import { useAuthStore } from '../../src/store';
+import { useAuthStore, useSessionStore } from '../../src/store';
+import { DevProfileSwitcher } from '../../src/components/DevProfileSwitcher';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 
 const AVATAR_SIZE = 52;
@@ -11,6 +13,8 @@ export default function ProfileScreen() {
   const router    = useRouter();
   const { sub, email } = useAuthStore();
   const { signOut } = useAuth();
+  const deviceId  = useSessionStore((s) => s.deviceId);
+  const [devVisible, setDevVisible] = useState(false);
 
   const handleSignOut = () => {
     Alert.alert('Sign out', 'Are you sure you want to sign out?', [
@@ -24,6 +28,16 @@ export default function ProfileScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Account</Text>
       </View>
+      {__DEV__ && (
+        <>
+          <TouchableOpacity style={styles.devBanner} onPress={() => setDevVisible(true)} activeOpacity={0.8}>
+            <Ionicons name="construct" size={14} color={colors.primary} />
+            <Text style={styles.devBannerText}>Dev profile: {deviceId ?? 'none'}</Text>
+            <Ionicons name="chevron-forward" size={14} color={colors.textMuted} />
+          </TouchableOpacity>
+          <DevProfileSwitcher visible={devVisible} onClose={() => setDevVisible(false)} />
+        </>
+      )}
 
       {sub ? (
         <View style={styles.section}>
@@ -66,6 +80,8 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container:        { flex: 1, backgroundColor: colors.background },
   header:           { paddingHorizontal: spacing.lg, paddingTop: spacing.xl + spacing.lg, paddingBottom: spacing.md },
+  devBanner:        { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginHorizontal: spacing.lg, marginBottom: spacing.sm, padding: spacing.sm, backgroundColor: colors.primaryLight, borderRadius: radius.md, borderWidth: 1, borderColor: colors.primary },
+  devBannerText:    { flex: 1, fontSize: fontSize.xs, color: colors.primary, fontWeight: '600' },
   headerTitle:      { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
   section:          { padding: spacing.lg, gap: spacing.md },
   avatarRow:        { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md },
