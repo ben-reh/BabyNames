@@ -11,7 +11,20 @@ const MODEL_VIBE        = 'amazon.nova-micro-v1:0';                    // JSON e
 const MODEL_DESCRIPTIONS = 'anthropic.claude-3-haiku-20240307-v1:0';  // personalized copy, high volume
 const RESULT_SIZE = 15;
 
-const NP_AGG = `(SELECT name, SUM(count) AS count FROM name_popularity WHERE year = 2025 GROUP BY name) np`;
+const UNISEX_MIN = 0.05;
+const UNISEX_MAX = 0.95;
+const SEX_FILTER_F = 0.05;
+const SEX_FILTER_M = 0.95;
+
+const NP_AGG = `(SELECT name, SUM(count) AS count, SUM(CASE WHEN gender='F' THEN count ELSE 0 END)::float / NULLIF(SUM(count),0) AS female_pct FROM name_popularity WHERE year = 2025 GROUP BY name) np`;
+
+function sexClause(sex: string | undefined): string {
+  const pct = `COALESCE(np.female_pct, nv.female_pct, 0.5)`;
+  if (sex === 'F') return `AND ${pct} >= ${SEX_FILTER_F}`;
+  if (sex === 'M') return `AND ${pct} <= ${SEX_FILTER_M}`;
+  if (sex === 'U') return `AND ${pct} > ${UNISEX_MIN} AND ${pct} < ${UNISEX_MAX}`;
+  return '';
+}
 
 interface VibeAdjustments {
   originBoosts: string[];
@@ -95,6 +108,7 @@ export async function consultantSession(body: Record<string, unknown>) {
   const deviceId = body.deviceId as string | undefined;
   const listId = body.listId as string | undefined;
   const vibeText = (body.vibeText as string | undefined)?.trim();
+  const sex = body.sex as string | undefined;
 
   if (!deviceId) return err(400, 'deviceId is required');
 
@@ -214,6 +228,7 @@ export async function consultantSession(body: Record<string, unknown>) {
 
   const originSql = (idx: number) =>
     originArr ? `AND nv.name = ANY($${idx}::text[])` : '';
+  const sexFilter = sexClause(sex);
 
   let retrievedNames: string[];
 
@@ -226,6 +241,7 @@ export async function consultantSession(body: Record<string, unknown>) {
        JOIN   ${NP_AGG} ON np.name = nv.name
        WHERE  nv.name NOT IN (SELECT name FROM user_swipes WHERE user_id = $1)
        ${popularityFilter}
+       ${sexFilter}
        ${originSql(3)}
        ORDER  BY nv.embedding <=> $2::vector
        LIMIT  ${RESULT_SIZE}`,
@@ -241,6 +257,7 @@ export async function consultantSession(body: Record<string, unknown>) {
        JOIN   ${NP_AGG} ON np.name = nv.name
        WHERE  nv.name NOT IN (SELECT name FROM user_swipes WHERE user_id = $1)
        ${popularityFilter}
+       ${sexFilter}
        ${originSql(2)}
        ORDER  BY np.count DESC
        LIMIT  ${RESULT_SIZE}`,
