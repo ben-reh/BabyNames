@@ -105,3 +105,22 @@ export const useSeenNamesStore = create<SeenNamesState>()(
     { name: 'seen-names', storage: createJSONStorage(() => AsyncStorage) },
   ),
 );
+
+// Auth store — not persisted; tokens live in expo-secure-store
+interface AuthState {
+  sub: string | null;
+  email: string | null;
+  migrationDone: boolean;
+  setAuth: (sub: string, email: string) => void;
+  setMigrationDone: () => void;
+  clearAuth: () => void;
+}
+
+export const useAuthStore = create<AuthState>()((set) => ({
+  sub: null,
+  email: null,
+  migrationDone: false,
+  setAuth: (sub, email) => set({ sub, email }),
+  setMigrationDone: () => set({ migrationDone: true }),
+  clearAuth: () => set({ sub: null, email: null, migrationDone: false }),
+}));
