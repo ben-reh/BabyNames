@@ -21,6 +21,32 @@ const EXPLORATION_MAX_COUNT = 499;
 const POPULAR_POOL = 150;
 const COLD_START_LIMIT = 100;
 
+// Index of the log-normalized popularity dim in the 567-dim name vector.
+// Layout: [0:36] origin one-hot, [36] year, [37] syllables, [38:49] stress, [49] vowel_ratio,
+// [50] length, [51:54] gender×3, [54] pop_norm, [55:567] embedding.
+const POP_DIM = 54;
+
+type RarityPref = 'rare' | 'neutral' | 'popular';
+
+// Infer rarity preference from the user's own taste vector.
+// pop_norm = log1p(count) / log1p(50000): ~0.45 ≈ 200 births/yr, ~0.65 ≈ 1500 births/yr.
+function rarityPref(tasteVec: number[]): RarityPref {
+  const pop = tasteVec[POP_DIM];
+  if (pop < 0.45) return 'rare';
+  if (pop > 0.65) return 'popular';
+  return 'neutral';
+}
+
+// Return adjusted bucket sizes and exploration floor based on rarity preference.
+// Total slots (explorationSize + popularSize) stays constant at EXPLORATION_SIZE + POPULAR_SIZE = 10.
+function rarityBuckets(pref: RarityPref): { explorationSize: number; popularSize: number; explMinCount: number } {
+  switch (pref) {
+    case 'rare':    return { explorationSize: 7, popularSize: 3, explMinCount: 5   };
+    case 'popular': return { explorationSize: 2, popularSize: 8, explMinCount: 150 };
+    default:        return { explorationSize: EXPLORATION_SIZE, popularSize: POPULAR_SIZE, explMinCount: EXPLORATION_MIN_COUNT };
+  }
+}
+
 // Pre-computed diverse cold-start deck (k=10 clusters × 3 names, interleaved by cluster).
 // Regenerate with: python3 data/scripts/compute_cold_start.py
 const COLD_START_DECK: Record<'F' | 'M' | 'U', string[]> = {
@@ -209,10 +235,12 @@ export async function getRecommendations(deviceId: string, params: Params) {
     listId ? getPartnerDeviceId(listId, deviceId) : Promise.resolve(null),
   ]);
 
-  // Resolve query vector: user's taste, optionally blended with partner's
+  // Resolve query vector: user's taste, optionally blended with partner's.
+  // Also preserve the user's own (unblended) taste vec for rarity preference detection.
+  let userTasteVec: number[] | null = null;
   let queryVec: string | null = null;
   if (tasteResult.rows.length > 0) {
-    const userVec = parseVec(tasteResult.rows[0].embedding as unknown as string);
+    userTasteVec = parseVec(tasteResult.rows[0].embedding as unknown as string);
     if (partnerDeviceId) {
       const partnerTaste = await pool.query<{ embedding: string }>(
         `SELECT embedding FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}'`,
@@ -220,12 +248,12 @@ export async function getRecommendations(deviceId: string, params: Params) {
       );
       if (partnerTaste.rows.length > 0) {
         const partnerVec = parseVec(partnerTaste.rows[0].embedding as unknown as string);
-        queryVec = blendVecs(userVec, partnerVec);
+        queryVec = blendVecs(userTasteVec, partnerVec);
       } else {
-        queryVec = `[${userVec.join(',')}]`;
+        queryVec = `[${userTasteVec.join(',')}]`;
       }
     } else {
-      queryVec = `[${userVec.join(',')}]`;
+      queryVec = `[${userTasteVec.join(',')}]`;
     }
   }
 
@@ -234,11 +262,14 @@ export async function getRecommendations(deviceId: string, params: Params) {
   if (queryVec !== null) {
     const likedCount = tasteResult.rows[0].liked_count ?? 0;
 
+    const pref = rarityPref(userTasteVec!);
+    const { explorationSize: baseExplSize, popularSize: basePopSize, explMinCount } = rarityBuckets(pref);
+
     const simWeight = likedCount < 3 ? 0 : Math.min(1, (likedCount - 3) / 7);
     const actualSimilaritySize = Math.round(SIMILARITY_SIZE * simWeight);
     const extraSlots = SIMILARITY_SIZE - actualSimilaritySize;
-    const actualPopularSize = POPULAR_SIZE + Math.round(extraSlots * 0.5);
-    const actualExplorationSize = EXPLORATION_SIZE + (extraSlots - Math.round(extraSlots * 0.5));
+    const actualPopularSize = basePopSize + Math.round(extraSlots * 0.5);
+    const actualExplorationSize = baseExplSize + (extraSlots - Math.round(extraSlots * 0.5));
 
     const tQueries = Date.now();
     const [similarityResult, explorationResult, popularResult] = await Promise.all([
@@ -262,7 +293,7 @@ export async function getRecommendations(deviceId: string, params: Params) {
          AND    np.count < $4${originSql(6)}
          ORDER  BY nv.embedding <=> $2::vector
          LIMIT  $5`,
-        originArr ? [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize, originArr] : [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize],
+        originArr ? [deviceId, queryVec, explMinCount, EXPLORATION_MAX_COUNT, actualExplorationSize, originArr] : [deviceId, queryVec, explMinCount, EXPLORATION_MAX_COUNT, actualExplorationSize],
       ),
       pool.query<{ name: string }>(
         `SELECT nv.name
@@ -275,7 +306,7 @@ export async function getRecommendations(deviceId: string, params: Params) {
       ),
     ]);
 
-    console.log(JSON.stringify({ event: 'rec_queries', duration_ms: Date.now() - tQueries, liked_count: likedCount, sim_weight: simWeight, partner_blended: !!partnerDeviceId, counts: { similarity: similarityResult.rows.length, exploration: explorationResult.rows.length, popular: popularResult.rows.length } }));
+    console.log(JSON.stringify({ event: 'rec_queries', duration_ms: Date.now() - tQueries, liked_count: likedCount, sim_weight: simWeight, rarity_pref: pref, pop_dim: userTasteVec![POP_DIM]?.toFixed(3), partner_blended: !!partnerDeviceId, counts: { similarity: similarityResult.rows.length, exploration: explorationResult.rows.length, popular: popularResult.rows.length } }));
 
     const pool60 = similarityResult.rows.map((r: { name: string }) => r.name);
     for (let i = pool60.length - 1; i > 0; i--) {
