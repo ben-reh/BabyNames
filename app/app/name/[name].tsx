@@ -17,11 +17,12 @@ const BOY_COLOR = colors.secondary;      // blue
 
 export default function NameDetail() {
   const router = useRouter();
-  const { name: nameParam } = useLocalSearchParams<{ name: string }>();
+  const { name: nameParam, sex: sexParam } = useLocalSearchParams<{ name: string; sex?: string }>();
   const { listId, deviceId, partnerRole, birthYear, setBirthYear } = useSessionStore();
   const { data: nameData, isLoading } = useName(nameParam);
   const { data: popularity } = useNamePopularity(nameParam);
-  const { data: yearRank } = useNameYearRank(nameParam, nameData?.sex ?? 'F');
+  const rankSex = (sexParam === 'M' || sexParam === 'F') ? sexParam : (nameData?.sex ?? 'F');
+  const { data: yearRank } = useNameYearRank(nameParam, rankSex);
   const { data: fComparable } = useNameComparableNames(nameParam, 'F', birthYear);
   const { data: mComparable } = useNameComparableNames(nameParam, 'M', birthYear);
   const { data: listData } = useList(listId);
@@ -133,7 +134,7 @@ export default function NameDetail() {
   return (
     <View style={styles.container}>
       <View style={styles.headerBar}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+        <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
           <Ionicons name="close" size={24} color={colors.text} />
         </TouchableOpacity>
       </View>
@@ -234,61 +235,53 @@ export default function NameDetail() {
 
         {(f2025 > 0 || m2025 > 0) && (
           <View style={styles.contextSection}>
-            {f2025 > 0 && (
-              <View>
-                <Text style={styles.contextText}>
-                  {`There were ${f2025.toLocaleString()} (${((f2025 / (SSA_BIRTHS_BY_YEAR[2025] ?? 1)) * 100).toFixed(2)}%) baby girls named ${nameData.name} in 2025.`}
-                </Text>
+            {f2025 > 0 && (!sexParam || sexParam === 'F') && (
+              <Text style={styles.contextText}>
+                {`There were ${f2025.toLocaleString()} (${((f2025 / (SSA_BIRTHS_BY_YEAR[2025] ?? 1)) * 100).toFixed(2)}%) baby girls named ${nameData.name} in 2025.`}
                 {fComparable && fComparable.length > 0 && (
-                  <View style={styles.contextRow}>
-                    <Text style={styles.contextText}>{'This is similar to '}</Text>
+                  <>
+                    {' This is similar to '}
                     <Text style={styles.contextLink} onPress={() => router.replace(`/name/${fComparable[0]}`)}>
                       {fComparable[0]}
                     </Text>
                     {fComparable.length >= 2 && (
                       <>
-                        <Text style={styles.contextText}>{' or '}</Text>
+                        {' or '}
                         <Text style={styles.contextLink} onPress={() => router.replace(`/name/${fComparable[1]}`)}>
                           {fComparable[1]}
                         </Text>
                       </>
                     )}
-                    <Text style={styles.contextText}>{' for girls born in '}</Text>
-                    <TouchableOpacity style={styles.yearPill} onPress={() => setYearPickerVisible(true)}>
-                      <Text style={styles.yearPillText}>{birthYear}</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.contextText}>{'.'}</Text>
-                  </View>
+                    {' for girls born in '}
+                    <Text style={styles.yearLink} onPress={() => setYearPickerVisible(true)}>{birthYear}</Text>
+                    {'.'}
+                  </>
                 )}
-              </View>
+              </Text>
             )}
-            {m2025 > 0 && (
-              <View style={f2025 > 0 ? styles.contextBlockDivider : undefined}>
-                <Text style={styles.contextText}>
-                  {`There were ${m2025.toLocaleString()} (${((m2025 / (SSA_BIRTHS_BY_YEAR[2025] ?? 1)) * 100).toFixed(2)}%) baby boys named ${nameData.name} in 2025.`}
-                </Text>
+            {m2025 > 0 && (!sexParam || sexParam === 'M') && (
+              <Text style={[styles.contextText, f2025 > 0 && (!sexParam || sexParam === 'F') ? styles.contextBlockDivider : undefined]}>
+                {`There were ${m2025.toLocaleString()} (${((m2025 / (SSA_BIRTHS_BY_YEAR[2025] ?? 1)) * 100).toFixed(2)}%) baby boys named ${nameData.name} in 2025.`}
                 {mComparable && mComparable.length > 0 && (
-                  <View style={styles.contextRow}>
-                    <Text style={styles.contextText}>{'This is similar to '}</Text>
+                  <>
+                    {' This is similar to '}
                     <Text style={styles.contextLink} onPress={() => router.replace(`/name/${mComparable[0]}`)}>
                       {mComparable[0]}
                     </Text>
                     {mComparable.length >= 2 && (
                       <>
-                        <Text style={styles.contextText}>{' or '}</Text>
+                        {' or '}
                         <Text style={styles.contextLink} onPress={() => router.replace(`/name/${mComparable[1]}`)}>
                           {mComparable[1]}
                         </Text>
                       </>
                     )}
-                    <Text style={styles.contextText}>{' for boys born in '}</Text>
-                    <TouchableOpacity style={styles.yearPill} onPress={() => setYearPickerVisible(true)}>
-                      <Text style={styles.yearPillText}>{birthYear}</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.contextText}>{'.'}</Text>
-                  </View>
+                    {' for boys born in '}
+                    <Text style={styles.yearLink} onPress={() => setYearPickerVisible(true)}>{birthYear}</Text>
+                    {'.'}
+                  </>
                 )}
-              </View>
+              </Text>
             )}
           </View>
         )}
@@ -448,20 +441,10 @@ const styles = StyleSheet.create({
   legendLabel: { fontSize: fontSize.xs, fontWeight: '600', color: colors.text },
   legendLabelOff: { color: colors.textMuted },
   contextSection: { marginBottom: spacing.xl, gap: spacing.xs },
-  contextBlockDivider: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
+  contextBlockDivider: { marginTop: spacing.md },
   contextText: { fontSize: fontSize.sm, color: colors.textMuted, lineHeight: 20 },
-  contextLink: { fontSize: fontSize.sm, color: colors.text, fontWeight: '600', lineHeight: 20 },
-  contextRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: spacing.xs },
-  yearPill: {
-    backgroundColor: colors.primaryLight,
-    borderRadius: radius.full,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    marginHorizontal: 2,
-  },
-  yearPillText: { fontSize: fontSize.xs, fontWeight: '700', color: colors.primary },
+  contextLink: { fontSize: fontSize.sm, color: colors.text, fontWeight: '600' },
+  yearLink: { fontSize: fontSize.sm, fontWeight: '700', color: colors.primary, textDecorationLine: 'underline' },
   section: { marginBottom: spacing.xl },
   sectionTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.text },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },

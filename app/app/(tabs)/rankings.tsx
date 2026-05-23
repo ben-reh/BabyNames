@@ -45,7 +45,7 @@ export default function RankingsScreen() {
   const renderItem = ({ item }: { item: RankingRow }) => {
     const isLiked = myNames.has(item.name);
     return (
-      <TouchableOpacity style={styles.row} onPress={() => router.push(`/name/${item.name}`)}>
+      <TouchableOpacity style={styles.row} onPress={() => router.push(`/name/${item.name}?sex=${sex}`)}>
         <Text style={styles.rankNum}>#{item.rank}</Text>
         <View style={styles.nameCol}>
           <Text style={styles.nameText}>{item.name}</Text>
