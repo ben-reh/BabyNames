@@ -580,7 +580,7 @@ export default function MyListsScreen() {
             />
             <View style={styles.modalSheet}>
               <View style={styles.modalHandle} />
-              <Text style={styles.modalTitle}>Tag "{selectedNameForTag}"</Text>
+              <Text style={styles.modalTitle}>Nametags for {selectedNameForTag}</Text>
 
               <ScrollView style={styles.tagPickerList} showsVerticalScrollIndicator={false}>
                 {allTagDefs.map((tag) => {
