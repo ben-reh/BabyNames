@@ -1,4 +1,5 @@
 export const FEATURES = {
-  brainstorm: __DEV__,
-  consultant: __DEV__,
+  brainstorm: false,
+  consultant: false,
+  devTab: false,
 };

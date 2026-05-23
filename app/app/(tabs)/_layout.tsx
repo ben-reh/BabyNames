@@ -79,7 +79,7 @@ export default function TabsLayout() {
         />
         <Tabs.Screen
           name="profile"
-          options={__DEV__ ? {
+          options={FEATURES.devTab ? {
             title: 'Dev',
             tabBarIcon: ({ color, size }) => <Ionicons name="construct" size={size} color={color} />,
           } : { href: null }}
