@@ -7,7 +7,6 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -19,6 +18,13 @@ import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 import { useConsultantStore, useSessionStore } from '../../src/store';
 
 type Phase = 'idle' | 'loading' | 'results';
+type GenderFilter = 'girl' | 'unisex' | 'boy';
+
+const GENDER_OPTIONS: { label: string; value: GenderFilter }[] = [
+  { label: 'Girl', value: 'girl' },
+  { label: 'Unisex', value: 'unisex' },
+  { label: 'Boy', value: 'boy' },
+];
 
 function LoadingShimmer() {
   const opacity = useRef(new Animated.Value(0.4)).current;
@@ -131,6 +137,7 @@ export default function ConsultantScreen() {
   const { deviceId, listId } = useSessionStore();
   const { session, vibeText, sex, setSession, setVibeText, setSex } = useConsultantStore();
   const [phase, setPhase] = useState<Phase>(session ? 'results' : 'idle');
+  const [genderFilter, setGenderFilter] = useState<GenderFilter>('girl');
   const [votes, setVotes] = useState<Record<string, 'like' | 'pass'>>({});
   const inputRef = useRef<TextInput>(null);
 
@@ -174,6 +181,7 @@ export default function ConsultantScreen() {
   }
 
   const currentSession = session;
+  const filteredNames = currentSession?.names.filter((n) => n.gender === genderFilter) ?? [];
 
   return (
     <View style={styles.container}>
@@ -196,6 +204,19 @@ export default function ConsultantScreen() {
           </View>
         </View>
         <Text style={styles.headerSubtitle}>Personalized picks, just for you</Text>
+        <View style={styles.segmented}>
+          {GENDER_OPTIONS.map((opt) => (
+            <TouchableOpacity
+              key={opt.value}
+              style={[styles.segment, genderFilter === opt.value && styles.segmentActive]}
+              onPress={() => setGenderFilter(opt.value)}
+            >
+              <Text style={[styles.segmentText, genderFilter === opt.value && styles.segmentTextActive]}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -203,7 +224,7 @@ export default function ConsultantScreen() {
           <LoadingShimmer />
         ) : (
           <FlatList
-            data={currentSession?.names ?? []}
+            data={filteredNames}
             keyExtractor={(item) => item.name}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.listContent}
