@@ -281,11 +281,11 @@ export default function NameDetail() {
           </View>
         )}
 
-        {nameData.vibe_names.length > 0 && (
+        {(nameData.vibe_names?.length ?? 0) > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>You might also like</Text>
             <View style={styles.chips}>
-              {nameData.vibe_names.slice(0, 10).map((n) => (
+              {(nameData.vibe_names ?? []).slice(0, 10).map((n) => (
                 <TouchableOpacity key={n} style={styles.chip} onPress={() => router.replace(`/name/${n}`)}>
                   <Text style={styles.chipText}>{n}</Text>
                 </TouchableOpacity>
@@ -294,11 +294,11 @@ export default function NameDetail() {
           </View>
         )}
 
-        {nameData.phonetic_names.length > 0 && (
+        {(nameData.phonetic_names?.length ?? 0) > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Similar Sounding Names</Text>
             <View style={styles.chips}>
-              {nameData.phonetic_names.slice(0, 8).map((n) => (
+              {(nameData.phonetic_names ?? []).slice(0, 8).map((n) => (
                 <TouchableOpacity key={n} style={styles.chip} onPress={() => router.replace(`/name/${n}`)}>
                   <Text style={styles.chipText}>{n}</Text>
                 </TouchableOpacity>
