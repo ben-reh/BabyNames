@@ -295,10 +295,10 @@ export async function searchNames(params: Params) {
   do {
     const result = await ddb.send(new ScanCommand({
       TableName: TABLE,
-      FilterExpression: 'begins_with(#n, :prefix)',
-      ExpressionAttributeNames: { '#n': 'name', '#rnk': 'rank' },
+      FilterExpression: 'begins_with(#n, :prefix) OR contains(#sv, :prefix)',
+      ExpressionAttributeNames: { '#n': 'name', '#rnk': 'rank', '#sv': 'spelling_variants' },
       ExpressionAttributeValues: { ':prefix': prefix },
-      ProjectionExpression: '#n, sex, #rnk, origin',
+      ProjectionExpression: '#n, sex, #rnk, origin, #sv',
       ExclusiveStartKey: lastKey,
     }));
     allMatches.push(...((result.Items ?? []) as Record<string, unknown>[]));
@@ -306,8 +306,17 @@ export async function searchNames(params: Params) {
   } while (lastKey);
 
   const items = allMatches
-    .filter(i => (i.name as string).toLowerCase().startsWith(lq))
-    .sort((a, b) => Number(a.rank ?? 99999) - Number(b.rank ?? 99999))
+    .filter(i => {
+      if ((i.name as string).toLowerCase().startsWith(lq)) return true;
+      const variants = ((i.spelling_variants as string) || '').split(' ').filter(Boolean);
+      return variants.some(v => v.toLowerCase().startsWith(lq));
+    })
+    .sort((a, b) => {
+      const aNameMatch = (a.name as string).toLowerCase().startsWith(lq);
+      const bNameMatch = (b.name as string).toLowerCase().startsWith(lq);
+      if (aNameMatch !== bNameMatch) return aNameMatch ? -1 : 1;
+      return Number(a.rank ?? 99999) - Number(b.rank ?? 99999);
+    })
     .slice(0, 20);
 
   return ok({ names: items.map(formatName) });
