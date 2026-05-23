@@ -79,10 +79,10 @@ export default function TabsLayout() {
         />
         <Tabs.Screen
           name="profile"
-          options={FEATURES.devTab ? {
-            title: 'Dev',
-            tabBarIcon: ({ color, size }) => <Ionicons name="construct" size={size} color={color} />,
-          } : { href: null }}
+          options={{
+            title: 'Account',
+            tabBarIcon: ({ color, size }) => <Ionicons name="person-circle-outline" size={size} color={color} />,
+          }}
         />
       </Tabs>
       <MatchBanner />

@@ -10,7 +10,6 @@ import { useInfiniteRecommendations } from '../../src/api/recommendations';
 import { useRecordSwipe } from '../../src/api/swipe';
 import type { Name } from '../../src/api/types';
 import { useSessionStore, useFilterStore, useSeenNamesStore } from '../../src/store';
-import { ProfileAvatar } from '../../src/components/ProfileAvatar';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 import { logSwipe, logTimeToFirstCard, logQueueFetch, logQueueRebuild } from '../../src/utils/analytics';
 
@@ -240,7 +239,6 @@ export default function SwipeScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <ProfileAvatar />
           <Text style={styles.headerTitle}>Discover</Text>
         </View>
         <View style={styles.headerRight}>

@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -13,8 +14,22 @@ export default function ProfileScreen() {
   const router    = useRouter();
   const { sub, email } = useAuthStore();
   const { signOut } = useAuth();
-  const deviceId  = useSessionStore((s) => s.deviceId);
+  const { deviceId, clearSession } = useSessionStore();
   const [devVisible, setDevVisible] = useState(false);
+
+  const handleDevReset = () => {
+    Alert.alert('Reset session', 'Clear all local data and start fresh?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Reset',
+        style: 'destructive',
+        onPress: async () => {
+          await AsyncStorage.clear();
+          clearSession();
+        },
+      },
+    ]);
+  };
 
   const handleSignOut = () => {
     Alert.alert('Sign out', 'Are you sure you want to sign out?', [
@@ -36,6 +51,10 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={14} color={colors.textMuted} />
           </TouchableOpacity>
           <DevProfileSwitcher visible={devVisible} onClose={() => setDevVisible(false)} />
+          <TouchableOpacity style={styles.devResetRow} onPress={handleDevReset} activeOpacity={0.8}>
+            <Ionicons name="trash-outline" size={14} color={colors.error} />
+            <Text style={styles.devResetText}>Reset session</Text>
+          </TouchableOpacity>
         </>
       )}
 
@@ -82,6 +101,8 @@ const styles = StyleSheet.create({
   header:           { paddingHorizontal: spacing.lg, paddingTop: spacing.xl + spacing.lg, paddingBottom: spacing.md },
   devBanner:        { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginHorizontal: spacing.lg, marginBottom: spacing.sm, padding: spacing.sm, backgroundColor: colors.primaryLight, borderRadius: radius.md, borderWidth: 1, borderColor: colors.primary },
   devBannerText:    { flex: 1, fontSize: fontSize.xs, color: colors.primary, fontWeight: '600' },
+  devResetRow:      { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginHorizontal: spacing.lg, marginBottom: spacing.sm, padding: spacing.sm, backgroundColor: colors.card, borderRadius: radius.md, borderWidth: 1, borderColor: colors.error + '44' },
+  devResetText:     { flex: 1, fontSize: fontSize.xs, color: colors.error, fontWeight: '600' },
   headerTitle:      { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
   section:          { padding: spacing.lg, gap: spacing.md },
   avatarRow:        { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md },

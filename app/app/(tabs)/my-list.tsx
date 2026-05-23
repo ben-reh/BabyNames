@@ -151,7 +151,7 @@ function DraggableNameRow({
 
 export default function MyListsScreen() {
   const router = useRouter();
-  const { listId, deviceId, partnerRole, code, setSession, clearSession, defaultSex } = useSessionStore();
+  const { listId, deviceId, partnerRole, code, setSession, defaultSex } = useSessionStore();
   const { sex: rawSex, setSex } = useFilterStore();
   const sexFilter: SexFilter = rawSex ?? 'F';
   const setSexFilter = setSex;
@@ -330,20 +330,6 @@ export default function MyListsScreen() {
     }
   };
 
-  const handleDevReset = () => {
-    Alert.alert('Reset session', 'Clear all local data and start fresh?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Reset',
-        style: 'destructive',
-        onPress: async () => {
-          await AsyncStorage.clear();
-          clearSession();
-        },
-      },
-    ]);
-  };
-
   if (isLoading) {
     return (
       <View style={styles.center}>
@@ -470,13 +456,6 @@ export default function MyListsScreen() {
             count={filteredMatches.length}
             expanded={matchesExpanded}
             onToggle={() => setMatchesExpanded((v) => !v)}
-            right={
-              __DEV__ ? (
-                <TouchableOpacity onPress={handleDevReset} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
-                  <Text style={styles.devReset}>⚙</Text>
-                </TouchableOpacity>
-              ) : undefined
-            }
           />
           {matchesExpanded && (
             !partnerJoined ? (
@@ -872,7 +851,6 @@ const styles = StyleSheet.create({
   joinCodeBtn: { paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
   joinCodeBtnText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.primary },
   muted: { color: colors.textMuted, fontSize: fontSize.sm },
-  devReset: { fontSize: fontSize.md, color: colors.textMuted },
   modalOverlay: { flex: 1, justifyContent: 'flex-end' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
   modalSheet: {
