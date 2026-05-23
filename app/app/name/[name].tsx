@@ -99,6 +99,8 @@ export default function NameDetail() {
   const m2025 = mByYear.get(2025) ?? 0;
   const total2025 = f2025 + m2025;
   const femalePct = total2025 > 0 ? f2025 / total2025 : (nameData.female_pct ?? null);
+  const fPct2025 = total2025 > 0 ? f2025 / total2025 : 0;
+  const mPct2025 = total2025 > 0 ? m2025 / total2025 : 0;
 
   // Sample ~20 points for smooth rendering
   const step = Math.max(1, Math.ceil(allYears.length / 20));
@@ -235,54 +237,43 @@ export default function NameDetail() {
 
         {(f2025 > 0 || m2025 > 0) && (
           <View style={styles.contextSection}>
-            {f2025 > 0 && (!sexParam || sexParam === 'F') && (
-              <Text style={styles.contextText}>
-                {`There were ${f2025.toLocaleString()} (${((f2025 / (SSA_BIRTHS_BY_YEAR[2025] ?? 1)) * 100).toFixed(2)}%) baby girls named ${nameData.name} in 2025.`}
-                {fComparable && fComparable.length > 0 && (
-                  <>
-                    {' This is similar to '}
-                    <Text style={styles.contextLink} onPress={() => router.replace(`/name/${fComparable[0]}`)}>
-                      {fComparable[0]}
-                    </Text>
-                    {fComparable.length >= 2 && (
-                      <>
-                        {' or '}
-                        <Text style={styles.contextLink} onPress={() => router.replace(`/name/${fComparable[1]}`)}>
-                          {fComparable[1]}
-                        </Text>
-                      </>
-                    )}
-                    {' for girls born in '}
-                    <Text style={styles.yearLink} onPress={() => setYearPickerVisible(true)}>{birthYear}</Text>
-                    {'.'}
-                  </>
-                )}
-              </Text>
-            )}
-            {m2025 > 0 && (!sexParam || sexParam === 'M') && (
-              <Text style={[styles.contextText, f2025 > 0 && (!sexParam || sexParam === 'F') ? styles.contextBlockDivider : undefined]}>
-                {`There were ${m2025.toLocaleString()} (${((m2025 / (SSA_BIRTHS_BY_YEAR[2025] ?? 1)) * 100).toFixed(2)}%) baby boys named ${nameData.name} in 2025.`}
-                {mComparable && mComparable.length > 0 && (
-                  <>
-                    {' This is similar to '}
-                    <Text style={styles.contextLink} onPress={() => router.replace(`/name/${mComparable[0]}`)}>
-                      {mComparable[0]}
-                    </Text>
-                    {mComparable.length >= 2 && (
-                      <>
-                        {' or '}
-                        <Text style={styles.contextLink} onPress={() => router.replace(`/name/${mComparable[1]}`)}>
-                          {mComparable[1]}
-                        </Text>
-                      </>
-                    )}
-                    {' for boys born in '}
-                    <Text style={styles.yearLink} onPress={() => setYearPickerVisible(true)}>{birthYear}</Text>
-                    {'.'}
-                  </>
-                )}
-              </Text>
-            )}
+            {[
+              { sex: 'F' as const, count: f2025, pct: fPct2025, comparable: fComparable },
+              { sex: 'M' as const, count: m2025, pct: mPct2025, comparable: mComparable },
+            ]
+              .sort((a, b) => b.pct - a.pct)
+              .filter((g) => g.pct > 0.05)
+              .map((g, i) => (
+                <Text
+                  key={g.sex}
+                  style={[styles.contextText, i > 0 ? styles.contextBlockDivider : undefined]}
+                >
+                  {`There were ${g.count.toLocaleString()} (${((g.count / (SSA_BIRTHS_BY_YEAR[2025] ?? 1)) * 100).toFixed(2)}%) baby `}
+                  <Text style={{ color: g.sex === 'F' ? GIRL_COLOR : BOY_COLOR }}>{g.sex === 'F' ? 'girls' : 'boys'}</Text>
+                  {` named ${nameData.name} in 2025.`}
+                  {g.comparable && g.comparable.length > 0 && (
+                    <>
+                      {' This is similar to '}
+                      <Text style={styles.contextLink} onPress={() => router.replace(`/name/${g.comparable![0]}`)}>
+                        {g.comparable[0]}
+                      </Text>
+                      {g.comparable.length >= 2 && (
+                        <>
+                          {' or '}
+                          <Text style={styles.contextLink} onPress={() => router.replace(`/name/${g.comparable![1]}`)}>
+                            {g.comparable[1]}
+                          </Text>
+                        </>
+                      )}
+                      {' for '}
+                      <Text style={{ color: g.sex === 'F' ? GIRL_COLOR : BOY_COLOR }}>{g.sex === 'F' ? 'girls' : 'boys'}</Text>
+                      {' born in '}
+                      <Text style={styles.yearLink} onPress={() => setYearPickerVisible(true)}>{birthYear}</Text>
+                      {'.'}
+                    </>
+                  )}
+                </Text>
+              ))}
           </View>
         )}
 
