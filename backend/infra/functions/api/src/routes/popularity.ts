@@ -32,18 +32,21 @@ export async function getComparableNames(name: string, params: Params) {
   if (!sex) return err(400, 'sex is required');
 
   const { rows } = await getPool().query<{ name: string }>(
-    `WITH total AS (
-       SELECT SUM(count)::float AS births FROM name_popularity WHERE year = $2 AND gender = $3
+    `WITH current_total AS (
+       SELECT SUM(count)::float AS births FROM name_popularity WHERE year = 2025 AND gender = $3
      ),
-     target AS (
+     current_pct AS (
        SELECT np.count::float / t.births AS pct
-       FROM name_popularity np, total t
-       WHERE np.name = $1 AND np.year = $2 AND np.gender = $3
+       FROM name_popularity np, current_total t
+       WHERE np.name = $1 AND np.year = 2025 AND np.gender = $3
+     ),
+     hist_total AS (
+       SELECT SUM(count)::float AS births FROM name_popularity WHERE year = $2 AND gender = $3
      )
      SELECT np.name
-     FROM name_popularity np, total, target
+     FROM name_popularity np, hist_total, current_pct
      WHERE np.year = $2 AND np.gender = $3 AND np.name != $1
-     ORDER BY ABS(np.count::float / total.births - target.pct) ASC
+     ORDER BY ABS(np.count::float / hist_total.births - current_pct.pct) ASC
      LIMIT 2`,
     [name, year, sex],
   );
