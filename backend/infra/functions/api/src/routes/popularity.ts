@@ -32,11 +32,18 @@ export async function getComparableNames(name: string, params: Params) {
   if (!sex) return err(400, 'sex is required');
 
   const { rows } = await getPool().query<{ name: string }>(
-    `SELECT np.name
-     FROM name_popularity np
-     JOIN (SELECT count FROM name_popularity WHERE name = $1 AND year = $2 AND gender = $3) t ON true
+    `WITH total AS (
+       SELECT SUM(count)::float AS births FROM name_popularity WHERE year = $2 AND gender = $3
+     ),
+     target AS (
+       SELECT np.count::float / t.births AS pct
+       FROM name_popularity np, total t
+       WHERE np.name = $1 AND np.year = $2 AND np.gender = $3
+     )
+     SELECT np.name
+     FROM name_popularity np, total, target
      WHERE np.year = $2 AND np.gender = $3 AND np.name != $1
-     ORDER BY ABS(np.count - t.count) ASC
+     ORDER BY ABS(np.count::float / total.births - target.pct) ASC
      LIMIT 2`,
     [name, year, sex],
   );
