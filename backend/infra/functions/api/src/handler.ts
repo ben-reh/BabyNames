@@ -1,6 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { getBatchNames, getNames, getName, getRankings, searchNames } from './routes/names';
-import { getNameRank, getPopularity } from './routes/popularity';
+import { getComparableNames, getNameRank, getPopularity } from './routes/popularity';
 import { createList, joinList, getList, addName, removeName } from './routes/lists';
 import { getRecommendations, getUserSwipes, recordSwipe } from './routes/recommendations';
 import { listTagDefs, listTagAssignments, createTag, deleteTag, setNameTags, getPartnerTags } from './routes/tags';
@@ -77,6 +77,11 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const rankMatch = path.match(/^\/names\/([^/]+)\/rank$/);
     if (method === 'GET' && rankMatch) {
       return respond(await getNameRank(decodeURIComponent(rankMatch[1]), params));
+    }
+
+    const comparableMatch = path.match(/^\/names\/([^/]+)\/comparable$/);
+    if (method === 'GET' && comparableMatch) {
+      return respond(await getComparableNames(decodeURIComponent(comparableMatch[1]), params));
     }
 
     const nameTagsMatch = path.match(/^\/names\/([^/]+)\/tags$/);

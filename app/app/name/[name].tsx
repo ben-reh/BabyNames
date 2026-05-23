@@ -1,11 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
-import { ActionSheetIOS, ActivityIndicator, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActionSheetIOS, ActivityIndicator, Dimensions, FlatList, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import { useAddName, useList, useRemoveName } from '../../src/api/lists';
-import { useName, useNamePopularity, useNameYearRank } from '../../src/api/names';
+import { useName, useNameComparableNames, useNamePopularity, useNameYearRank } from '../../src/api/names';
 import { useRecordSwipe } from '../../src/api/swipe';
 import { useSessionStore } from '../../src/store';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
@@ -18,14 +18,18 @@ const BOY_COLOR = colors.secondary;      // blue
 export default function NameDetail() {
   const router = useRouter();
   const { name: nameParam } = useLocalSearchParams<{ name: string }>();
-  const { listId, deviceId, partnerRole } = useSessionStore();
+  const { listId, deviceId, partnerRole, birthYear, setBirthYear } = useSessionStore();
   const { data: nameData, isLoading } = useName(nameParam);
   const { data: popularity } = useNamePopularity(nameParam);
   const { data: yearRank } = useNameYearRank(nameParam, nameData?.sex ?? 'F');
+  const { data: fComparable } = useNameComparableNames(nameParam, 'F', birthYear);
+  const { data: mComparable } = useNameComparableNames(nameParam, 'M', birthYear);
   const { data: listData } = useList(listId);
   const addName = useAddName(listId!);
   const removeName = useRemoveName(listId!);
   const { mutate: recordSwipe } = useRecordSwipe();
+
+  const [yearPickerVisible, setYearPickerVisible] = useState(false);
 
   const [showF, setShowF] = useState(true);
   const [showM, setShowM] = useState(true);
@@ -228,6 +232,67 @@ export default function NameDetail() {
           </View>
         )}
 
+        {(f2025 > 0 || m2025 > 0) && (
+          <View style={styles.contextSection}>
+            {f2025 > 0 && (
+              <View>
+                <Text style={styles.contextText}>
+                  {`There were ${f2025.toLocaleString()} (${((f2025 / (SSA_BIRTHS_BY_YEAR[2025] ?? 1)) * 100).toFixed(2)}%) baby girls named ${nameData.name} in 2025.`}
+                </Text>
+                {fComparable && fComparable.length > 0 && (
+                  <View style={styles.contextRow}>
+                    <Text style={styles.contextText}>{'This is similar to '}</Text>
+                    <Text style={styles.contextLink} onPress={() => router.replace(`/name/${fComparable[0]}`)}>
+                      {fComparable[0]}
+                    </Text>
+                    {fComparable.length >= 2 && (
+                      <>
+                        <Text style={styles.contextText}>{' or '}</Text>
+                        <Text style={styles.contextLink} onPress={() => router.replace(`/name/${fComparable[1]}`)}>
+                          {fComparable[1]}
+                        </Text>
+                      </>
+                    )}
+                    <Text style={styles.contextText}>{' for girls born in '}</Text>
+                    <TouchableOpacity style={styles.yearPill} onPress={() => setYearPickerVisible(true)}>
+                      <Text style={styles.yearPillText}>{birthYear}</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.contextText}>{'.'}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+            {m2025 > 0 && (
+              <View style={f2025 > 0 ? styles.contextBlockDivider : undefined}>
+                <Text style={styles.contextText}>
+                  {`There were ${m2025.toLocaleString()} (${((m2025 / (SSA_BIRTHS_BY_YEAR[2025] ?? 1)) * 100).toFixed(2)}%) baby boys named ${nameData.name} in 2025.`}
+                </Text>
+                {mComparable && mComparable.length > 0 && (
+                  <View style={styles.contextRow}>
+                    <Text style={styles.contextText}>{'This is similar to '}</Text>
+                    <Text style={styles.contextLink} onPress={() => router.replace(`/name/${mComparable[0]}`)}>
+                      {mComparable[0]}
+                    </Text>
+                    {mComparable.length >= 2 && (
+                      <>
+                        <Text style={styles.contextText}>{' or '}</Text>
+                        <Text style={styles.contextLink} onPress={() => router.replace(`/name/${mComparable[1]}`)}>
+                          {mComparable[1]}
+                        </Text>
+                      </>
+                    )}
+                    <Text style={styles.contextText}>{' for boys born in '}</Text>
+                    <TouchableOpacity style={styles.yearPill} onPress={() => setYearPickerVisible(true)}>
+                      <Text style={styles.yearPillText}>{birthYear}</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.contextText}>{'.'}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+          </View>
+        )}
+
         {nameData.similar_names.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Similar names</Text>
@@ -271,7 +336,80 @@ export default function NameDetail() {
           <Text style={styles.longPressHint}>Hold to choose which list</Text>
         )}
       </View>
+
+      <YearSelectorModal
+        visible={yearPickerVisible}
+        value={birthYear}
+        onSelect={(y) => { setBirthYear(y); setYearPickerVisible(false); }}
+        onClose={() => setYearPickerVisible(false)}
+      />
     </View>
+  );
+}
+
+const BIRTH_YEARS = Array.from({ length: 2010 - 1950 + 1 }, (_, i) => 1950 + i);
+const YEAR_ITEM_HEIGHT = 52;
+
+function YearSelectorModal({
+  visible,
+  value,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean;
+  value: number;
+  onSelect: (y: number) => void;
+  onClose: () => void;
+}) {
+  const listRef = useRef<FlatList>(null);
+
+  useEffect(() => {
+    if (visible) {
+      const index = BIRTH_YEARS.indexOf(value);
+      if (index >= 0) {
+        setTimeout(() => {
+          listRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.5 });
+        }, 80);
+      }
+    }
+  }, [visible, value]);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={pickerStyles.overlay} activeOpacity={1} onPress={onClose}>
+        <View style={pickerStyles.sheet} onStartShouldSetResponder={() => true}>
+          <View style={pickerStyles.handle} />
+          <View style={pickerStyles.header}>
+            <Text style={pickerStyles.title}>Your birth year</Text>
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+              <Text style={pickerStyles.done}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            ref={listRef}
+            data={BIRTH_YEARS}
+            keyExtractor={(y) => String(y)}
+            getItemLayout={(_, index) => ({ length: YEAR_ITEM_HEIGHT, offset: YEAR_ITEM_HEIGHT * index, index })}
+            showsVerticalScrollIndicator={false}
+            renderItem={({ item }) => {
+              const selected = item === value;
+              return (
+                <TouchableOpacity
+                  style={[pickerStyles.item, selected && pickerStyles.itemSelected]}
+                  onPress={() => onSelect(item)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[pickerStyles.itemText, selected && pickerStyles.itemTextSelected]}>
+                    {item}
+                  </Text>
+                  {selected && <Ionicons name="checkmark" size={18} color={colors.primary} />}
+                </TouchableOpacity>
+              );
+            }}
+          />
+        </View>
+      </TouchableOpacity>
+    </Modal>
   );
 }
 
@@ -309,6 +447,21 @@ const styles = StyleSheet.create({
   legendDotOff: { opacity: 0.25 },
   legendLabel: { fontSize: fontSize.xs, fontWeight: '600', color: colors.text },
   legendLabelOff: { color: colors.textMuted },
+  contextSection: { marginBottom: spacing.xl, gap: spacing.xs },
+  contextBlockDivider: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
+  contextText: { fontSize: fontSize.sm, color: colors.textMuted, lineHeight: 20 },
+  contextLink: { fontSize: fontSize.sm, color: colors.text, fontWeight: '600', lineHeight: 20 },
+  contextRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: spacing.xs },
+  yearPill: {
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    marginHorizontal: 2,
+  },
+  yearPillText: { fontSize: fontSize.xs, fontWeight: '700', color: colors.primary },
   section: { marginBottom: spacing.xl },
   sectionTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.text },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
@@ -321,4 +474,36 @@ const styles = StyleSheet.create({
   toggleBtnActive: { backgroundColor: colors.primary },
   toggleBtnText: { fontSize: fontSize.md, fontWeight: '700', color: colors.primary },
   toggleBtnTextActive: { color: '#fff' },
+});
+
+const pickerStyles = StyleSheet.create({
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  sheet: {
+    backgroundColor: colors.card,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    maxHeight: 420,
+    paddingBottom: spacing.xl,
+  },
+  handle: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: colors.border,
+    alignSelf: 'center',
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  header: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+    borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  title: { fontSize: fontSize.md, fontWeight: '700', color: colors.text },
+  done: { fontSize: fontSize.md, fontWeight: '600', color: colors.primary },
+  item: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    height: YEAR_ITEM_HEIGHT, paddingHorizontal: spacing.lg,
+  },
+  itemSelected: { backgroundColor: colors.primaryLight },
+  itemText: { fontSize: fontSize.md, color: colors.text },
+  itemTextSelected: { fontWeight: '700', color: colors.primary },
 });

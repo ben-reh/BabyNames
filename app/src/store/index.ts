@@ -10,11 +10,13 @@ interface SessionState {
   code: string | null;
   onboardingDone: boolean;
   defaultSex: 'M' | 'F' | 'U' | null;
+  birthYear: number;
   setSession: (s: { listId: string; deviceId: string; partnerRole: 'A' | 'B'; code: string }) => void;
   clearSession: () => void;
   setOnboardingDone: () => void;
   setDefaultSex: (sex: 'M' | 'F' | 'U') => void;
   setDeviceId: (deviceId: string, listId: string | null) => void;
+  setBirthYear: (year: number) => void;
 }
 
 interface FilterState {
@@ -42,11 +44,13 @@ export const useSessionStore = create<SessionState>()(
       code: null,
       onboardingDone: false,
       defaultSex: null,
+      birthYear: 1990,
       setSession: (s) => set(s),
       clearSession: () => set({ listId: null, deviceId: null, partnerRole: null, code: null, onboardingDone: false, defaultSex: null }),
       setOnboardingDone: () => set({ onboardingDone: true }),
       setDefaultSex: (sex) => set({ defaultSex: sex }),
       setDeviceId: (deviceId, listId) => set({ deviceId, listId, partnerRole: listId ? 'A' : null, code: null, onboardingDone: true }),
+      setBirthYear: (year) => set({ birthYear: year }),
     }),
     { name: 'session', storage: createJSONStorage(() => AsyncStorage) },
   ),

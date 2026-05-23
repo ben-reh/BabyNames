@@ -164,7 +164,7 @@ export class BabyNamesStack extends cdk.Stack {
       vpc,
       description: 'Bedrock Runtime VPC Endpoint',
     });
-    bedrockEndpointSg.addIngressRule(lambdaSg, ec2.Port.tcp(443), 'Lambda → Bedrock');
+    bedrockEndpointSg.addIngressRule(lambdaSg, ec2.Port.tcp(443), 'Lambda to Bedrock');
 
     new ec2.InterfaceVpcEndpoint(this, 'BedrockRuntimeEndpoint', {
       vpc,
@@ -250,7 +250,7 @@ export class BabyNamesStack extends cdk.Stack {
       },
     });
 
-    const integration = new apigateway.LambdaIntegration(apiFunction);
+    const integration = new apigateway.LambdaIntegration(apiFunction, { allowTestInvoke: false });
 
     // /names routes
     const names = api.root.addResource('names');
@@ -262,6 +262,7 @@ export class BabyNamesStack extends cdk.Stack {
     nameParam.addMethod('GET', integration);
     nameParam.addResource('popularity').addMethod('GET', integration);
     nameParam.addResource('rank').addMethod('GET', integration);
+    nameParam.addResource('comparable').addMethod('GET', integration);
     const nameTags = nameParam.addResource('tags');
     nameTags.addMethod('PUT', integration);
 
@@ -279,11 +280,11 @@ export class BabyNamesStack extends cdk.Stack {
     tags.addResource('{tagId}').addMethod('DELETE', integration);
 
     // /ai routes
-    const aiIntegration = new apigateway.LambdaIntegration(aiFunction);
+    const aiIntegration = new apigateway.LambdaIntegration(aiFunction, { allowTestInvoke: false });
     api.root.addResource('ai').addResource('chat').addMethod('POST', aiIntegration);
 
     // /consultant routes
-    const consultantIntegration = new apigateway.LambdaIntegration(consultantFunction);
+    const consultantIntegration = new apigateway.LambdaIntegration(consultantFunction, { allowTestInvoke: false });
     const consultant = api.root.addResource('consultant');
     consultant.addResource('session').addMethod('POST', consultantIntegration);
     consultant.addResource('feedback').addMethod('POST', integration);

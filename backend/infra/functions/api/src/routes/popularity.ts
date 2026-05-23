@@ -26,6 +26,24 @@ export async function getPopularity(name: string, params: Params) {
   return ok({ name, data: rows });
 }
 
+export async function getComparableNames(name: string, params: Params) {
+  const year = parseInt(params.year || '1990', 10);
+  const { sex } = params;
+  if (!sex) return err(400, 'sex is required');
+
+  const { rows } = await getPool().query<{ name: string }>(
+    `SELECT np.name
+     FROM name_popularity np
+     JOIN (SELECT count FROM name_popularity WHERE name = $1 AND year = $2 AND gender = $3) t ON true
+     WHERE np.year = $2 AND np.gender = $3 AND np.name != $1
+     ORDER BY ABS(np.count - t.count) ASC
+     LIMIT 2`,
+    [name, year, sex],
+  );
+
+  return ok({ comparable: rows.map((r) => r.name) });
+}
+
 export async function getNameRank(name: string, params: Params) {
   const year = parseInt(params.year || '2024', 10);
   const { sex } = params;

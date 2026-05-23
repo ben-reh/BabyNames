@@ -92,6 +92,20 @@ export function useRankings(year: number, sex: 'M' | 'F') {
   });
 }
 
+export function useNameComparableNames(name: string, sex: 'M' | 'F', year: number) {
+  return useQuery({
+    queryKey: ['name', name, 'comparable', year, sex],
+    queryFn: async () => {
+      const { data } = await api.get<{ comparable: string[] }>(
+        `/names/${encodeURIComponent(name)}/comparable`,
+        { params: { year, sex } },
+      );
+      return data.comparable;
+    },
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
 export function useNameSearch(q: string) {
   return useQuery({
     queryKey: ['names', 'search', q],
