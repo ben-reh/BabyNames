@@ -327,8 +327,8 @@ export default function NameDetail() {
                           {
                             text: 'Use this spelling',
                             onPress: () => {
-                              if (!listId) return;
-                              setSpellingOverride({ name: nameParam, displayName: v });
+                              if (!listId || !deviceId) return;
+                              setSpellingOverride({ deviceId, name: nameParam, displayName: v });
                             },
                           },
                         ],

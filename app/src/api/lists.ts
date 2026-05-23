@@ -92,8 +92,8 @@ export function useRemoveName(listId: string) {
 export function useSetSpellingOverride(listId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ name, displayName }: { name: string; displayName: string }) => {
-      await api.put(`/lists/${listId}/spelling`, { name, displayName });
+    mutationFn: async ({ deviceId, name, displayName }: { deviceId: string; name: string; displayName: string }) => {
+      await api.put(`/lists/${listId}/spelling`, { deviceId, name, displayName });
     },
     onMutate: async ({ name, displayName }) => {
       await qc.cancelQueries({ queryKey: ['list', listId] });
