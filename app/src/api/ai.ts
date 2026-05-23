@@ -12,7 +12,7 @@ export interface NameResult {
   rank: number | null;
   origin: string | null;
   year_peak: number | null;
-  similar_names: string[];
+  vibe_names: string[];
 }
 
 export interface ChatResponse {

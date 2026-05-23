@@ -91,11 +91,11 @@ function SectionHeader({
   );
 }
 
-function NameRow({ name, onPress }: { name: string; onPress: () => void }) {
+function NameRow({ name, displayName, onPress }: { name: string; displayName?: string; onPress: () => void }) {
   return (
     <TouchableOpacity style={styles.nameCard} onPress={onPress} activeOpacity={0.7}>
       <View style={styles.nameRow}>
-        <Text style={styles.nameText}>{name}</Text>
+        <Text style={styles.nameText}>{displayName ?? name}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -103,6 +103,7 @@ function NameRow({ name, onPress }: { name: string; onPress: () => void }) {
 
 function DraggableNameRow({
   name,
+  displayName,
   drag,
   isActive,
   onPress,
@@ -111,6 +112,7 @@ function DraggableNameRow({
   onTagPress,
 }: {
   name: string;
+  displayName?: string;
   drag: () => void;
   isActive: boolean;
   onPress: () => void;
@@ -121,7 +123,7 @@ function DraggableNameRow({
   return (
     <View style={[styles.nameCard, isActive && styles.nameCardDragging]}>
       <TouchableOpacity style={styles.nameContent} onPress={onPress} activeOpacity={0.7}>
-        <Text style={styles.nameText}>{name}</Text>
+        <Text style={styles.nameText}>{displayName ?? name}</Text>
         {(tags.length > 0 || partnerTags.length > 0) && (
           <View style={styles.tagChipsRow}>
             {tags.map((t) => <TagChip key={t.id} tag={t} />)}
@@ -196,6 +198,7 @@ export default function MyListsScreen() {
   const myNames = partnerRole === 'A' ? data?.partnerA?.names ?? [] : data?.partnerB?.names ?? [];
   const matches = data?.matches ?? [];
   const partnerJoined = data?.partnerCount === 2;
+  const spellingOverrides = data?.spellingOverrides ?? {};
 
   const allNames = [...new Set([...myNames, ...matches, ...passedNames])];
   const { data: sexMap } = useNamesBatch(allNames);
@@ -445,6 +448,7 @@ export default function MyListsScreen() {
                   renderItem={({ item: name, drag, isActive }: RenderItemParams<string>) => (
                     <DraggableNameRow
                       name={name}
+                      displayName={spellingOverrides[name]}
                       drag={drag}
                       isActive={isActive}
                       onPress={() => router.push(`/name/${name}`)}
@@ -514,7 +518,7 @@ export default function MyListsScreen() {
                       onPress={() => router.push(`/name/${name}`)}
                     >
                       <View style={styles.nameContent}>
-                        <Text style={styles.nameText}>{name}</Text>
+                        <Text style={styles.nameText}>{spellingOverrides[name] ?? name}</Text>
                         {(myTags.length > 0 || theirTags.length > 0) && (
                           <View style={styles.tagChipsRow}>
                             {myTags.map((t) => <TagChip key={t.id} tag={t} />)}
@@ -552,6 +556,7 @@ export default function MyListsScreen() {
                   <NameRow
                     key={name}
                     name={name}
+                    displayName={spellingOverrides[name]}
                     onPress={() => router.push(`/name/${name}`)}
                   />
                 ))}

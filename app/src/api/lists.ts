@@ -88,3 +88,33 @@ export function useRemoveName(listId: string) {
     onSettled: () => qc.invalidateQueries({ queryKey: ['list', listId] }),
   });
 }
+
+export function useSetSpellingOverride(listId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ name, displayName }: { name: string; displayName: string }) => {
+      await api.put(`/lists/${listId}/spelling`, { name, displayName });
+    },
+    onMutate: async ({ name, displayName }) => {
+      await qc.cancelQueries({ queryKey: ['list', listId] });
+      const prev = qc.getQueryData<ListSession>(['list', listId]);
+      if (prev) {
+        qc.setQueryData<ListSession>(['list', listId], (old) => {
+          if (!old) return old;
+          const overrides = { ...old.spellingOverrides };
+          if (displayName === name) {
+            delete overrides[name];
+          } else {
+            overrides[name] = displayName;
+          }
+          return { ...old, spellingOverrides: overrides };
+        });
+      }
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['list', listId], ctx.prev);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['list', listId] }),
+  });
+}

@@ -19,7 +19,7 @@ interface NameResult {
   rank: number | null;
   origin: string | null;
   year_peak: number | null;
-  similar_names: string[];
+  vibe_names: string[];
 }
 
 function toNameResult(item: Record<string, unknown>): NameResult {
@@ -29,7 +29,7 @@ function toNameResult(item: Record<string, unknown>): NameResult {
     rank: item.rank ? Number(item.rank) : null,
     origin: (item.origin as string) || null,
     year_peak: item.year_peak ? Number(item.year_peak) : null,
-    similar_names: (item.similar_names as string[]) || [],
+    vibe_names: (item.vibe_names as string[]) || [],
   };
 }
 
@@ -43,8 +43,8 @@ async function toolGetNameInfo(input: { name: string }): Promise<unknown> {
   );
   if (!result.Item) return { error: `Name '${input.name}' not found in database.` };
   const r = toNameResult(result.Item as Record<string, unknown>);
-  // Cap similar_names so the model doesn't dump a 20-name list into its prose
-  return { ...r, similar_names: r.similar_names.slice(0, 5) };
+  // Cap vibe_names so the model doesn't dump a long list into its prose
+  return { ...r, vibe_names: r.vibe_names.slice(0, 5) };
 }
 
 async function toolSearchNames(input: {
@@ -65,7 +65,7 @@ async function toolSearchNames(input: {
     );
     if (!result.Item) return { error: `Name '${input.similar_to}' not found.`, names: [] };
 
-    const similarNames = (result.Item.similar_names as string[]) || [];
+    const similarNames = (result.Item.vibe_names as string[]) || [];
     if (similarNames.length === 0) return { names: [] };
 
     const batchResult = await ddb.send(

@@ -108,7 +108,38 @@ export async function getList(listId: string) {
     matches: item.partnerB ? computeMatches(aNames, bNames) : [],
     partnerCount: item.partnerB ? 2 : 1,
     filters: item.filters ?? {},
+    spellingOverrides: (item.spellingOverrides as Record<string, string>) ?? {},
   });
+}
+
+export async function setSpellingOverride(listId: string, body: Record<string, unknown>) {
+  const { deviceId, name, displayName } = body as { deviceId: string; name: string; displayName: string };
+  if (!deviceId || !name || !displayName) return err(400, 'deviceId, name, and displayName are required');
+
+  const result = await ddb.send(new GetCommand({ TableName: LISTS_TABLE, Key: { listId } }));
+  const item = result.Item;
+  if (!item) return err(404, 'List not found');
+
+  const role = partnerRole(item, deviceId);
+  if (!role) return err(403, 'Device is not a partner in this list');
+
+  const current = (item.spellingOverrides as Record<string, string>) ?? {};
+  let updated: Record<string, string>;
+  if (displayName === name) {
+    const { [name]: _, ...rest } = current;
+    updated = rest;
+  } else {
+    updated = { ...current, [name]: displayName };
+  }
+
+  await ddb.send(new UpdateCommand({
+    TableName: LISTS_TABLE,
+    Key: { listId },
+    UpdateExpression: 'SET spellingOverrides = :overrides',
+    ExpressionAttributeValues: { ':overrides': updated },
+  }));
+
+  return ok({ listId, name, displayName });
 }
 
 export async function addName(listId: string, name: string, body: Record<string, unknown>) {

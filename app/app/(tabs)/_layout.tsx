@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { View } from 'react-native';
 import { useList } from '../../src/api/lists';
 import { MatchBanner } from '../../src/components/MatchBanner';
+import { FEATURES } from '../../src/constants/features';
 import { colors } from '../../src/constants/theme';
 import { useMatchBannerStore, useSessionStore } from '../../src/store';
 
@@ -64,17 +65,17 @@ export default function TabsLayout() {
         />
         <Tabs.Screen
           name="chat"
-          options={{
+          options={FEATURES.brainstorm ? {
             title: 'Brainstorm',
             tabBarIcon: ({ color, size }) => <Ionicons name="cloud" size={size} color={color} />,
-          }}
+          } : { href: null }}
         />
         <Tabs.Screen
           name="consultant"
-          options={{
+          options={FEATURES.consultant ? {
             title: 'Consultant',
             tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" size={size} color={color} />,
-          }}
+          } : { href: null }}
         />
         <Tabs.Screen
           name="profile"

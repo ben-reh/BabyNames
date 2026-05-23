@@ -8,7 +8,8 @@ export interface Name {
   year_peak: number | null;
   total_count: number | null;
   female_pct: number | null;
-  similar_names: string[];
+  vibe_names: string[];
+  phonetic_names: string[];
   spelling_variants: string[];
 }
 
@@ -30,6 +31,7 @@ export interface ListSession {
   matches: string[];
   partnerCount: 1 | 2;
   filters: Record<string, unknown>;
+  spellingOverrides: Record<string, string>;
 }
 
 export interface RankingRow {

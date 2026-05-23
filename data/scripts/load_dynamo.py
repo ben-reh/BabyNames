@@ -22,11 +22,14 @@ def load_similar(path):
         return similar
     with open(path) as f:
         for row in csv.DictReader(f):
-            similar[row['name']] = json.loads(row['similar_names'])
+            similar[row['name']] = {
+                'vibe_names': json.loads(row.get('vibe_names', '[]')),
+                'phonetic_names': json.loads(row.get('phonetic_names', '[]')),
+            }
     return similar
 
 
-def to_item(row, similar_names):
+def to_item(row, similar):
     item = {}
     for key, val in row.items():
         if val == '':
@@ -38,8 +41,11 @@ def to_item(row, similar_names):
                 item[key] = val
         else:
             item[key] = val
-    if similar_names:
-        item['similar_names'] = similar_names
+    if similar:
+        if similar.get('vibe_names'):
+            item['vibe_names'] = similar['vibe_names']
+        if similar.get('phonetic_names'):
+            item['phonetic_names'] = similar['phonetic_names']
     return item
 
 
@@ -64,7 +70,7 @@ def load():
     with open(names_path) as f:
         for row in csv.DictReader(f):
             total += 1
-            item = to_item(row, similar.get(row['name'], []))
+            item = to_item(row, similar.get(row['name'], {}))
             batch.append({'PutRequest': {'Item': item}})
 
             if len(batch) == BATCH_SIZE:

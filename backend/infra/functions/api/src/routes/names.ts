@@ -17,7 +17,8 @@ export function formatName(item: Record<string, unknown>) {
     year_peak: item.year_peak ? Number(item.year_peak) : null,
     total_count: item.total_count ? Number(item.total_count) : null,
     female_pct: item.female_pct ? Number(item.female_pct) : null,
-    similar_names: (item.similar_names as string[]) || [],
+    vibe_names: (item.vibe_names as string[]) || [],
+    phonetic_names: (item.phonetic_names as string[]) || [],
     spelling_variants: item.spelling_variants
       ? (item.spelling_variants as string).split(' ').filter(Boolean)
       : [],
@@ -76,14 +77,14 @@ export async function getNames(params: Params) {
           RequestItems: {
             [TABLE]: {
               Keys: keys,
-              ProjectionExpression: '#n, similar_names',
+              ProjectionExpression: '#n, vibe_names',
               ExpressionAttributeNames: { '#n': 'name' },
             },
           },
         }));
-        const liked = (batch.Responses?.[TABLE] ?? []) as Array<{ name: string; similar_names?: string[] }>;
+        const liked = (batch.Responses?.[TABLE] ?? []) as Array<{ name: string; vibe_names?: string[] }>;
         for (const item of liked) {
-          for (const s of item.similar_names ?? []) {
+          for (const s of item.vibe_names ?? []) {
             similarityScores.set(s, (similarityScores.get(s) ?? 0) + 1);
           }
         }
@@ -288,7 +289,7 @@ export async function searchNames(params: Params) {
   const prefix = q[0].toUpperCase() + q.slice(1).toLowerCase();
   const lq = q.toLowerCase();
 
-  // Paginate the full scan. ProjectionExpression drops etymology_raw / similar_names,
+  // Paginate the full scan. ProjectionExpression drops etymology_raw / vibe_names / phonetic_names,
   // shrinking items from ~2KB to ~40 bytes so the whole table fits in 3-4 pages.
   const allMatches: Record<string, unknown>[] = [];
   let lastKey: Record<string, unknown> | undefined;

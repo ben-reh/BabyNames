@@ -299,6 +299,7 @@ export class BabyNamesStack extends cdk.Stack {
     const listNames = listParam.addResource('names');
     listNames.addMethod('POST', integration);
     listNames.addResource('{name}').addMethod('DELETE', integration);
+    listParam.addResource('spelling').addMethod('PUT', integration);
 
     // /auth routes
     const auth = api.root.addResource('auth');

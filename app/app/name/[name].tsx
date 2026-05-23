@@ -2,9 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActionSheetIOS, ActivityIndicator, Dimensions, FlatList, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActionSheetIOS, ActivityIndicator, Alert, Dimensions, FlatList, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
-import { useAddName, useList, useRemoveName } from '../../src/api/lists';
+import { useAddName, useList, useRemoveName, useSetSpellingOverride } from '../../src/api/lists';
 import { useName, useNameComparableNames, useNamePopularity, useNameYearRank } from '../../src/api/names';
 import { useRecordSwipe } from '../../src/api/swipe';
 import { useSessionStore } from '../../src/store';
@@ -28,7 +28,11 @@ export default function NameDetail() {
   const { data: listData } = useList(listId);
   const addName = useAddName(listId!);
   const removeName = useRemoveName(listId!);
+  const { mutate: setSpellingOverride } = useSetSpellingOverride(listId!);
   const { mutate: recordSwipe } = useRecordSwipe();
+
+  const spellingOverrides = listData?.spellingOverrides ?? {};
+  const displayName = spellingOverrides[nameParam] ?? nameParam;
 
   const [yearPickerVisible, setYearPickerVisible] = useState(false);
 
@@ -142,7 +146,7 @@ export default function NameDetail() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.name}>{nameData.name}</Text>
+        <Text style={styles.name}>{displayName}</Text>
         {nameData.meaning && (
           <Text style={styles.meaning}>"{nameData.meaning}"</Text>
         )}
@@ -277,11 +281,24 @@ export default function NameDetail() {
           </View>
         )}
 
-        {nameData.similar_names.length > 0 && (
+        {nameData.vibe_names.length > 0 && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Similar names</Text>
+            <Text style={styles.sectionTitle}>You might also like</Text>
             <View style={styles.chips}>
-              {nameData.similar_names.slice(0, 10).map((n) => (
+              {nameData.vibe_names.slice(0, 10).map((n) => (
+                <TouchableOpacity key={n} style={styles.chip} onPress={() => router.replace(`/name/${n}`)}>
+                  <Text style={styles.chipText}>{n}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {nameData.phonetic_names.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Similar Sounding Names</Text>
+            <View style={styles.chips}>
+              {nameData.phonetic_names.slice(0, 8).map((n) => (
                 <TouchableOpacity key={n} style={styles.chip} onPress={() => router.replace(`/name/${n}`)}>
                   <Text style={styles.chipText}>{n}</Text>
                 </TouchableOpacity>
@@ -292,13 +309,36 @@ export default function NameDetail() {
 
         {nameData.spelling_variants.length > 0 && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Spellings</Text>
+            <Text style={styles.sectionTitle}>Spellings of {nameParam}</Text>
             <View style={styles.chips}>
-              {nameData.spelling_variants.map((v) => (
-                <View key={v} style={[styles.chip, styles.variantChip]}>
-                  <Text style={styles.chipText}>{v}</Text>
-                </View>
-              ))}
+              {[nameParam, ...nameData.spelling_variants].map((v) => {
+                const isSelected = v === displayName;
+                return (
+                  <TouchableOpacity
+                    key={v}
+                    style={[styles.chip, styles.variantChip, isSelected && styles.variantChipSelected]}
+                    onPress={() => {
+                      if (isSelected) return;
+                      Alert.alert(
+                        `Use "${v}"?`,
+                        `This will show "${v}" wherever "${nameParam}" appears in your list.`,
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Use this spelling',
+                            onPress: () => {
+                              if (!listId) return;
+                              setSpellingOverride({ name: nameParam, displayName: v });
+                            },
+                          },
+                        ],
+                      );
+                    }}
+                  >
+                    <Text style={[styles.chipText, isSelected && styles.variantChipTextSelected]}>{v}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
         )}
@@ -441,6 +481,8 @@ const styles = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
   chip: { backgroundColor: colors.primaryLight, borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
   variantChip: { backgroundColor: colors.border },
+  variantChipSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
+  variantChipTextSelected: { color: '#fff' },
   chipText: { fontSize: fontSize.sm, color: colors.text, fontWeight: '600' },
   bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border, padding: spacing.lg, paddingBottom: spacing.xl, gap: spacing.xs },
   longPressHint: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: 'center' },

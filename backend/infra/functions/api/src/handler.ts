@@ -1,7 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { getBatchNames, getNames, getName, getRankings, searchNames } from './routes/names';
 import { getComparableNames, getNameRank, getPopularity } from './routes/popularity';
-import { createList, joinList, getList, addName, removeName } from './routes/lists';
+import { createList, joinList, getList, addName, removeName, setSpellingOverride } from './routes/lists';
 import { getRecommendations, getUserSwipes, recordSwipe } from './routes/recommendations';
 import { listTagDefs, listTagAssignments, createTag, deleteTag, setNameTags, getPartnerTags } from './routes/tags';
 import { migrateGuestData } from './routes/auth';
@@ -148,6 +148,11 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
         decodeURIComponent(listNameMatch[2]),
         parseBody(event),
       ));
+    }
+
+    const listSpellingMatch = path.match(/^\/lists\/([^/]+)\/spelling$/);
+    if (method === 'PUT' && listSpellingMatch) {
+      return respond(await setSpellingOverride(decodeURIComponent(listSpellingMatch[1]), parseBody(event)));
     }
 
     // --- Consultant routes ---
