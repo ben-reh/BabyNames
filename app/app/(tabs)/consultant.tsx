@@ -18,13 +18,6 @@ import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 import { useConsultantStore, useSessionStore } from '../../src/store';
 
 type Phase = 'idle' | 'loading' | 'results';
-type GenderFilter = 'girl' | 'unisex' | 'boy';
-
-const GENDER_OPTIONS: { label: string; value: GenderFilter }[] = [
-  { label: 'Girl', value: 'girl' },
-  { label: 'Unisex', value: 'unisex' },
-  { label: 'Boy', value: 'boy' },
-];
 
 function LoadingShimmer() {
   const opacity = useRef(new Animated.Value(0.4)).current;
@@ -137,7 +130,6 @@ export default function ConsultantScreen() {
   const { deviceId, listId } = useSessionStore();
   const { session, vibeText, sex, setSession, setVibeText, setSex } = useConsultantStore();
   const [phase, setPhase] = useState<Phase>(session ? 'results' : 'idle');
-  const [genderFilter, setGenderFilter] = useState<GenderFilter>('girl');
   const [votes, setVotes] = useState<Record<string, 'like' | 'pass'>>({});
   const inputRef = useRef<TextInput>(null);
 
@@ -181,39 +173,19 @@ export default function ConsultantScreen() {
   }
 
   const currentSession = session;
-  const filteredNames = currentSession?.names.filter((n) => n.gender === genderFilter) ?? [];
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <View style={styles.headerTopRow}>
-          <View style={styles.headerTitleRow}>
-            <Ionicons name="person" size={18} color={colors.primary} />
-            <Text style={styles.headerTitle}>Your Name Consultant</Text>
-          </View>
-          <View style={styles.sexToggle}>
-            {([['F', '♀ Girl'], ['U', 'Unisex'], ['M', '♂ Boy']] as ['F' | 'U' | 'M', string][]).map(([val, label]) => (
-              <TouchableOpacity
-                key={val}
-                style={[styles.sexSegment, sex === val && styles.sexSegmentActive]}
-                onPress={() => setSex(val)}
-              >
-                <Text style={[styles.sexSegmentText, sex === val && styles.sexSegmentTextActive]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-        <Text style={styles.headerSubtitle}>Personalized picks, just for you</Text>
+        <Text style={styles.headerTitle}>Brainstorm</Text>
         <View style={styles.segmented}>
-          {GENDER_OPTIONS.map((opt) => (
+          {([['F', '♀ Girl'], ['U', 'Unisex'], ['M', '♂ Boy']] as ['F' | 'U' | 'M', string][]).map(([val, label]) => (
             <TouchableOpacity
-              key={opt.value}
-              style={[styles.segment, genderFilter === opt.value && styles.segmentActive]}
-              onPress={() => setGenderFilter(opt.value)}
+              key={val}
+              style={[styles.segment, sex === val && styles.segmentActive]}
+              onPress={() => setSex(val)}
             >
-              <Text style={[styles.segmentText, genderFilter === opt.value && styles.segmentTextActive]}>
-                {opt.label}
-              </Text>
+              <Text style={[styles.segmentText, sex === val && styles.segmentTextActive]}>{label}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -224,7 +196,7 @@ export default function ConsultantScreen() {
           <LoadingShimmer />
         ) : (
           <FlatList
-            data={filteredNames}
+            data={currentSession?.names ?? []}
             keyExtractor={(item) => item.name}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.listContent}
@@ -314,24 +286,19 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
     backgroundColor: colors.card,
   },
-  headerTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 2,
+  headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text, marginBottom: spacing.sm },
+  segmented: { flexDirection: 'row', backgroundColor: colors.border, borderRadius: radius.md, padding: 3 },
+  segment: { flex: 1, paddingVertical: spacing.sm, alignItems: 'center', borderRadius: radius.sm },
+  segmentActive: {
+    backgroundColor: colors.card,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
-  headerTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  headerTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.text },
-  headerSubtitle: { fontSize: fontSize.xs, color: colors.textMuted },
-  sexToggle: { flexDirection: 'row', backgroundColor: colors.border, borderRadius: radius.full, padding: 2 },
-  sexSegment: { paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.full },
-  sexSegmentActive: { backgroundColor: colors.card },
-  sexSegmentText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textMuted },
-  sexSegmentTextActive: { color: colors.text },
+  segmentText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '600' },
+  segmentTextActive: { color: colors.text },
 
   listContent: { padding: spacing.md, paddingBottom: spacing.xxl, gap: spacing.md },
 
