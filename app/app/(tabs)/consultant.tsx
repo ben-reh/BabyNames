@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { type ConsultantName, useConsultantFeedback, useConsultantSession } from '../../src/api/consultant';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
-import { useConsultantStore, useSessionStore } from '../../src/store';
+import { useConsultantStore, useFilterStore, useSessionStore } from '../../src/store';
 
 type Phase = 'idle' | 'loading' | 'results';
 
@@ -129,6 +129,7 @@ export default function ConsultantScreen() {
   const router = useRouter();
   const { deviceId, listId } = useSessionStore();
   const { session, vibeText, sex, setSession, setVibeText, setSex } = useConsultantStore();
+  const filterSex = useFilterStore((s) => s.sex);
   const [phase, setPhase] = useState<Phase>(session ? 'results' : 'idle');
   const [votes, setVotes] = useState<Record<string, 'like' | 'pass'>>({});
   const inputRef = useRef<TextInput>(null);
@@ -139,15 +140,17 @@ export default function ConsultantScreen() {
   // Load profile on first open if no session yet
   useEffect(() => {
     if (!session && deviceId && phase === 'idle') {
-      handleGenerate();
+      const initialSex = filterSex ?? sex;
+      setSex(initialSex);
+      handleGenerate(initialSex);
     }
   }, []);
 
-  function handleGenerate() {
+  function handleGenerate(sexOverride?: 'F' | 'M') {
     if (!deviceId) return;
     setPhase('loading');
     generateSession(
-      { deviceId, listId: listId ?? undefined, vibeText: vibeText || undefined, sex },
+      { deviceId, listId: listId ?? undefined, vibeText: vibeText || undefined, sex: sexOverride ?? sex },
       {
         onSuccess: (data) => {
           setSession(data);
