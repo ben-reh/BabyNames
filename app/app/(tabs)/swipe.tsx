@@ -25,7 +25,7 @@ function NameCard({ name, sex }: { name: Name; sex: 'F' | 'M' | null }) {
   if (!name) return <View style={[styles.card, { backgroundColor: cardBg }]} />;
   const displayRank = name.rank_2025 ?? name.rank;
   return (
-    <TouchableOpacity style={[styles.card, { backgroundColor: cardBg }]} onPress={() => router.push(`/name/${name.name}`)} activeOpacity={0.95}>
+    <TouchableOpacity style={[styles.card, { backgroundColor: cardBg }]} onPress={() => router.push(`/name/${name.name}?sex=${sex ?? name.sex ?? ''}`)} activeOpacity={0.95}>
       <View style={styles.cardContent}>
         <Text style={styles.cardName}>{name.name}</Text>
         <View style={styles.cardMeta}>
@@ -202,7 +202,7 @@ export default function SwipeScreen() {
   const renderSearchItem = ({ item }: { item: Name }) => {
     const isLiked = likedNames.has(item.name);
     return (
-      <TouchableOpacity style={styles.searchRow} onPress={() => router.push(`/name/${item.name}`)}>
+      <TouchableOpacity style={styles.searchRow} onPress={() => router.push(`/name/${item.name}?sex=${filters.sex ?? item.sex ?? ''}`)}>
         <Text style={[styles.sexIcon, item.sex === 'F' ? styles.sexF : styles.sexM]}>
           {item.sex === 'F' ? '♀' : '♂'}
         </Text>
