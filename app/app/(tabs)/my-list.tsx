@@ -36,11 +36,10 @@ import {
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 import { useSessionStore, useListOrderStore, useFilterStore } from '../../src/store';
 
-type SexFilter = 'F' | 'M' | 'U';
+type SexFilter = 'F' | 'M';
 
 const SEX_OPTIONS: { label: string; value: SexFilter }[] = [
   { label: '♀ Girl', value: 'F' },
-  { label: 'Unisex', value: 'U' },
   { label: '♂ Boy', value: 'M' },
 ];
 
@@ -210,7 +209,6 @@ export default function MyListsScreen() {
       const femalePct = entry == null ? unknownDefault : (entry.female_pct ?? (entry.sex === 'F' ? 1 : 0));
       if (sexFilter === 'F') return femalePct >= 0.05;
       if (sexFilter === 'M') return femalePct <= 0.95;
-      if (sexFilter === 'U') return femalePct > 0.05 && femalePct < 0.95;
       return true;
     });
   }

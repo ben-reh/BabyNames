@@ -16,11 +16,10 @@ import { logSwipe, logTimeToFirstCard, logQueueFetch, logQueueRebuild } from '..
 const CARD_BG: Record<string, string> = {
   F: colors.primaryLight,
   M: '#EEF3FD',
-  U: colors.card,
   default: colors.card,
 };
 
-function NameCard({ name, sex }: { name: Name; sex: 'F' | 'M' | 'U' | null }) {
+function NameCard({ name, sex }: { name: Name; sex: 'F' | 'M' | null }) {
   const router = useRouter();
   const cardBg = CARD_BG[sex ?? 'default'] ?? CARD_BG.default;
   if (!name) return <View style={[styles.card, { backgroundColor: cardBg }]} />;
@@ -243,7 +242,7 @@ export default function SwipeScreen() {
         </View>
         <View style={styles.headerRight}>
           <View style={styles.sexToggle}>
-            {([['F', '♀ Girl'], ['U', 'Unisex'], ['M', '♂ Boy']] as ['F' | 'U' | 'M', string][]).map(([val, label]) => (
+            {([['F', '♀ Girl'], ['M', '♂ Boy']] as ['F' | 'M', string][]).map(([val, label]) => (
               <TouchableOpacity
                 key={val}
                 style={[styles.sexSegment, filters.sex === val && styles.sexSegmentActive]}

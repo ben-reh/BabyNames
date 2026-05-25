@@ -5,12 +5,11 @@ import { useSwipeBack } from '../../src/components/SwipeBackScreen';
 import { useFilterStore, useSessionStore } from '../../src/store';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 
-type SexOption = 'F' | 'M' | 'U';
+type SexOption = 'F' | 'M';
 
 const OPTIONS: { value: SexOption; label: string; selectedBg: string }[] = [
   { value: 'F', label: 'Girl names', selectedBg: colors.primaryLight },
   { value: 'M', label: 'Boy names', selectedBg: '#EEF3FD' },
-  { value: 'U', label: 'Unisex names', selectedBg: colors.card },
 ];
 
 export default function SexFilter() {

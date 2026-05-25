@@ -9,21 +9,21 @@ interface SessionState {
   partnerRole: 'A' | 'B' | null;
   code: string | null;
   onboardingDone: boolean;
-  defaultSex: 'M' | 'F' | 'U' | null;
+  defaultSex: 'M' | 'F' | null;
   birthYear: number;
   setSession: (s: { listId: string; deviceId: string; partnerRole: 'A' | 'B'; code: string }) => void;
   clearSession: () => void;
   setOnboardingDone: () => void;
-  setDefaultSex: (sex: 'M' | 'F' | 'U') => void;
+  setDefaultSex: (sex: 'M' | 'F') => void;
   setDeviceId: (deviceId: string, listId: string | null) => void;
   setBirthYear: (year: number) => void;
 }
 
 interface FilterState {
-  sex: 'M' | 'F' | 'U' | null;
+  sex: 'M' | 'F' | null;
   origins: string[];
   popularity: string[];
-  setSex: (sex: 'M' | 'F' | 'U' | null) => void;
+  setSex: (sex: 'M' | 'F' | null) => void;
   setOrigins: (origins: string[]) => void;
   setPopularity: (popularity: string[]) => void;
   resetFilters: () => void;
@@ -52,7 +52,15 @@ export const useSessionStore = create<SessionState>()(
       setDeviceId: (deviceId, listId) => set({ deviceId, listId, partnerRole: listId ? 'A' : null, code: null, onboardingDone: true }),
       setBirthYear: (year) => set({ birthYear: year }),
     }),
-    { name: 'session', storage: createJSONStorage(() => AsyncStorage) },
+    {
+      name: 'session',
+      storage: createJSONStorage(() => AsyncStorage),
+      version: 1,
+      migrate: (s: any) => {
+        if (s.defaultSex === 'U') s.defaultSex = null;
+        return s;
+      },
+    },
   ),
 );
 
@@ -71,6 +79,11 @@ export const useFilterStore = create<FilterState>()(
       name: 'filters',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (state) => ({ sex: state.sex }),
+      version: 1,
+      migrate: (s: any) => {
+        if (s.sex === 'U') s.sex = null;
+        return s;
+      },
     },
   ),
 );
@@ -142,10 +155,10 @@ interface ConsultantSession {
 interface ConsultantStoreState {
   session: ConsultantSession | null;
   vibeText: string;
-  sex: 'F' | 'U' | 'M';
+  sex: 'F' | 'M';
   setSession: (session: Omit<ConsultantSession, 'generatedAt'>) => void;
   setVibeText: (text: string) => void;
-  setSex: (sex: 'F' | 'U' | 'M') => void;
+  setSex: (sex: 'F' | 'M') => void;
   clearSession: () => void;
 }
 
@@ -160,6 +173,14 @@ export const useConsultantStore = create<ConsultantStoreState>()(
       setSex: (sex) => set({ sex }),
       clearSession: () => set({ session: null }),
     }),
-    { name: 'consultant', storage: createJSONStorage(() => AsyncStorage) },
+    {
+      name: 'consultant',
+      storage: createJSONStorage(() => AsyncStorage),
+      version: 1,
+      migrate: (s: any) => {
+        if (s.sex === 'U') s.sex = 'F';
+        return s;
+      },
+    },
   ),
 );

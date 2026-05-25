@@ -179,7 +179,7 @@ export default function ConsultantScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Brainstorm</Text>
         <View style={styles.segmented}>
-          {([['F', '♀ Girl'], ['U', 'Unisex'], ['M', '♂ Boy']] as ['F' | 'U' | 'M', string][]).map(([val, label]) => (
+          {([['F', '♀ Girl'], ['M', '♂ Boy']] as ['F' | 'M', string][]).map(([val, label]) => (
             <TouchableOpacity
               key={val}
               style={[styles.segment, sex === val && styles.segmentActive]}

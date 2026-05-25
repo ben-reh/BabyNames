@@ -14,11 +14,10 @@ import { ORIGINS } from '../src/constants/origins';
 import { colors, fontSize, radius, spacing } from '../src/constants/theme';
 import { useFilterStore, useSessionStore } from '../src/store';
 
-type Sex = 'M' | 'F' | 'U';
+type Sex = 'M' | 'F';
 
 const SEX_OPTIONS: { label: string; value: Sex }[] = [
   { label: '♀ Girl', value: 'F' },
-  { label: 'Unisex', value: 'U' },
   { label: '♂ Boy', value: 'M' },
 ];
 
@@ -75,7 +74,7 @@ export default function FilterSheet() {
   };
 
   const handleReset = () => {
-    setLocalSex('U');
+    setLocalSex('F');
     setLocalOrigins([]);
     setLocalPopularity([]);
   };

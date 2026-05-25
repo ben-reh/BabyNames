@@ -45,7 +45,7 @@ export default function NameDetail() {
     : listData?.partnerB?.names ?? [];
   const isInMyList = myNames.includes(nameParam);
 
-  const handleAdd = (sexContext: 'F' | 'M' | 'U') => {
+  const handleAdd = (sexContext: 'F' | 'M') => {
     if (!deviceId) return;
     addName.mutate({ deviceId, name: nameParam });
     recordSwipe({ deviceId, name: nameParam, liked: true, sex_context: sexContext });
@@ -66,11 +66,11 @@ export default function NameDetail() {
     ActionSheetIOS.showActionSheetWithOptions(
       {
         title: isInMyList ? `Move "${nameParam}" to` : `Add "${nameParam}" to`,
-        options: ['Cancel', '♀ Girl list', 'Unisex list', '♂ Boy list'],
+        options: ['Cancel', '♀ Girl list', '♂ Boy list'],
         cancelButtonIndex: 0,
       },
       (buttonIndex) => {
-        const ctx = ([null, 'F', 'U', 'M'] as const)[buttonIndex];
+        const ctx = ([null, 'F', 'M'] as const)[buttonIndex];
         if (!ctx) return;
         if (isInMyList) {
           recordSwipe({ deviceId, name: nameParam, liked: true, sex_context: ctx });
@@ -245,7 +245,12 @@ export default function NameDetail() {
               { sex: 'F' as const, count: f2025, pct: fPct2025, comparable: fComparable },
               { sex: 'M' as const, count: m2025, pct: mPct2025, comparable: mComparable },
             ]
-              .sort((a, b) => b.pct - a.pct)
+              .sort((a, b) => {
+                const preferredSex = sexParam === 'M' ? 'M' : 'F';
+                if (a.sex === preferredSex && b.sex !== preferredSex) return -1;
+                if (b.sex === preferredSex && a.sex !== preferredSex) return 1;
+                return b.pct - a.pct;
+              })
               .filter((g) => g.pct > 0.05)
               .map((g, i) => (
                 <Text
