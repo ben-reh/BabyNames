@@ -266,10 +266,11 @@ export class BabyNamesStack extends cdk.Stack {
     const nameTags = nameParam.addResource('tags');
     nameTags.addMethod('PUT', integration);
 
-    // /recommendations + /swipe routes
+    // /recommendations + /swipe + /onboarding routes
     api.root.addResource('recommendations').addMethod('GET', integration);
     api.root.addResource('swipe').addMethod('POST', integration);
     api.root.addResource('swipes').addMethod('GET', integration);
+    api.root.addResource('onboarding').addMethod('POST', integration);
 
 
     // /tags routes

@@ -9,11 +9,12 @@ interface Props {
 }
 
 export function DevProfileSwitcher({ visible, onClose }: Props) {
-  const deviceId      = useSessionStore((s) => s.deviceId);
-  const setDeviceId   = useSessionStore((s) => s.setDeviceId);
-  const clearSeen     = useSeenNamesStore((s) => s.clearSeen);
+  const deviceId        = useSessionStore((s) => s.deviceId);
+  const setDeviceId     = useSessionStore((s) => s.setDeviceId);
+  const resetOnboarding = useSessionStore((s) => s.resetOnboarding);
+  const clearSeen       = useSeenNamesStore((s) => s.clearSeen);
   const clearConsultant = useConsultantStore((s) => s.clearSession);
-  const resetFilters  = useFilterStore((s) => s.resetFilters);
+  const resetFilters    = useFilterStore((s) => s.resetFilters);
 
   const switchProfile = (deviceId: string, listId: string | null) => {
     setDeviceId(deviceId, listId);
@@ -56,6 +57,12 @@ export function DevProfileSwitcher({ visible, onClose }: Props) {
           })}
         </ScrollView>
         <View style={styles.footer}>
+          <Pressable
+            style={styles.resetBtn}
+            onPress={() => { resetOnboarding(); onClose(); }}
+          >
+            <Text style={styles.resetTxt}>↩ Restart onboarding</Text>
+          </Pressable>
           <Text style={styles.footerNote}>
             Seed: python3.12 data/scripts/seed_dev_profiles.py
           </Text>
@@ -82,6 +89,8 @@ const styles = StyleSheet.create({
   unseededBadge:   { fontSize: fontSize.xs, fontWeight: '600', color: colors.textMuted, backgroundColor: colors.border, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.full },
   cardDesc:        { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 2 },
   cardSwipes:      { fontSize: fontSize.xs, color: colors.textMuted },
-  footer:          { padding: spacing.lg, borderTopWidth: 1, borderTopColor: colors.border },
+  footer:          { padding: spacing.lg, borderTopWidth: 1, borderTopColor: colors.border, gap: spacing.sm },
+  resetBtn:        { alignSelf: 'flex-start', paddingVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
+  resetTxt:        { fontSize: fontSize.sm, color: colors.textMuted },
   footerNote:      { fontSize: fontSize.xs, color: colors.textMuted, fontFamily: 'Courier' },
 });

@@ -21,14 +21,13 @@ const ORIGIN_TOL    = 0.1;
 const VECTOR_DIM    = HC_DIMS + EMBED_DIMS; // 567
 
 // ── Retrieval / deck constants ────────────────────────────────────────────────
-const RETRIEVAL_K  = 100;  // ANN pool size per centroid
-const SIMILARITY_SIZE  = 10;
-const POPULAR_SIZE     = 5;
-const EXPLORATION_SIZE = 5;
-const POPULAR_POOL     = 150;
-const EXPLORATION_MIN_COUNT = 25;
-const EXPLORATION_MAX_COUNT = 499;
-const COLD_START_LIMIT = 100;
+const ANN_FETCH_K  = 400;  // raw cosine candidates fetched per centroid
+const RETRIEVAL_K  = 100;  // candidates passed to reranker after pop-prior blend
+const POP_PRIOR_ALPHA = 0.40;  // blend weight for log-popularity (0 = pure cosine)
+const SIM_SIZE          = 15;   // similarity bucket (absorbs old popular bucket)
+const EXPLORE_SIZE      = 5;    // anti-centroid exploration bucket
+const LOG_SAMPLE_SIZE   = 20;   // phase 0: log-weighted random sample
+const EXPLORE_MIN_COUNT = 200;  // min pop count for exploration candidates
 
 // Reranker blend: BLEND * cosine_rank_score + (1 - BLEND) * reranker_score
 const BLEND = 0.2;
@@ -100,8 +99,18 @@ function vecToStr(v: number[]): string {
   return `[${v.join(',')}]`;
 }
 
+function blendVecsArr(a: number[], b: number[]): number[] {
+  return a.map((v, i) => 0.5 * v + 0.5 * b[i]);
+}
+
 function blendVecs(a: number[], b: number[]): string {
-  return `[${a.map((v, i) => 0.5 * v + 0.5 * b[i]).join(',')}]`;
+  return vecToStr(blendVecsArr(a, b));
+}
+
+function makeAntiCentroid(vec: number[]): number[] {
+  const anti = vec.slice();
+  for (let i = HC_DIMS; i < HC_DIMS + EMBED_DIMS; i++) anti[i] = -vec[i];
+  return anti;
 }
 
 // ── K-means++ ────────────────────────────────────────────────────────────────
@@ -262,6 +271,8 @@ async function ensureSchema(pool: ReturnType<typeof getPool>) {
   await run(`ALTER TABLE user_taste DROP CONSTRAINT IF EXISTS user_taste_pkey`);
   await run(`ALTER TABLE user_taste DROP CONSTRAINT IF EXISTS user_taste_user_id_key`);
   await run(`ALTER TABLE user_taste ADD CONSTRAINT user_taste_user_id_ctx UNIQUE (user_id, sex_context)`);
+  await run(`ALTER TABLE user_taste ADD COLUMN IF NOT EXISTS onboarding_count FLOAT NOT NULL DEFAULT 0`);
+  await run(`ALTER TABLE user_taste ADD COLUMN IF NOT EXISTS preference_filters JSONB`);
 
   // Wipe and retype user_taste.embedding if dimension doesn't match new vectors
   await pool.query(`DO $$
@@ -335,15 +346,6 @@ async function getPartnerDeviceId(listId: string, deviceId: string): Promise<str
   return null;
 }
 
-// ── Cold-start deck ───────────────────────────────────────────────────────────
-// Pre-computed diverse cold-start deck (k=10 clusters × 3 names, interleaved by cluster).
-// Regenerate with: python3 data/scripts/compute_cold_start.py
-const COLD_START_DECK: Record<'F' | 'M' | 'U', string[]> = {
-  F: ['Ailany','Josephine','Harper','Charlotte','Emma','Hazel','Sophia','Eleanor','Kennedy','Olivia','Leilani','Jade','Lily','Abigail','Amelia','Lainey','Isabella','Elizabeth','Rose','Evelyn','Ayla','Juniper','Nora','Adeline','Mia','Avery','Eliana','Penelope','Melanie','Violet'],
-  M: ['Mateo','Oliver','Elijah','Lucas','Liam','Alexander','Matthew','John','Ethan','Cooper','Santiago','Theodore','Elias','Luca','Noah','Jackson','Theo','Luke','Owen','Brooks','Anthony','Henry','Julian','Hudson','Levi','Maverick','Archer','Gael','Grayson','Colton'],
-  U: ['Riley','Jordan','Taylor','Quinn','Parker','Morgan','Avery','Charlie','Logan','Harper','Blake','Finley','Rowan','Emerson','Elliot','Hayden','Peyton','Cameron','Reese','Drew','Jamie','Skylar','Dakota','Scout','Sage','Ryan','Dylan','Casey','Marlowe','Sutton'],
-};
-
 // ── Main recommendation function ──────────────────────────────────────────────
 export async function getRecommendations(deviceId: string, params: Params) {
   const { sex, listId } = params;
@@ -351,26 +353,37 @@ export async function getRecommendations(deviceId: string, params: Params) {
   const filter = sexClause(sex);
   const excl   = `AND nv.name NOT IN (SELECT name FROM user_swipes WHERE user_id = $1 AND sex_context = '${ctx}')`;
   const pool   = getPool();
+  await ensureSchema(pool);
 
   const popularityTiers = params.popularity ? params.popularity.split(',').map(s => s.trim()).filter(Boolean) : [];
   const popFilter = popularityClause(popularityTiers);
 
-  const origins   = params.origins ? params.origins.split(',').map(s => s.trim()).filter(Boolean) : [];
-  const originSet = await getOriginNames(origins);
-  const originArr = originSet ? [...originSet] : null;
-  const originSql = (nextIdx: number) => originArr ? ` AND nv.name = ANY($${nextIdx}::text[])` : '';
-
   const [tasteResult, partnerDeviceId] = await Promise.all([
-    pool.query<{ embedding: string; liked_count: number }>(
-      `SELECT embedding, liked_count FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}'`,
+    pool.query<{ embedding: string; liked_count: number; preference_filters: unknown }>(
+      `SELECT embedding, liked_count, preference_filters FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}'`,
       [deviceId],
     ),
     listId ? getPartnerDeviceId(listId, deviceId) : Promise.resolve(null),
   ]);
 
-  // Resolve primary taste vector (for reranker features) and ANN query vec
-  let tasteVec: number[] | null = null;
-  let queryVec: string | null   = null;
+  // Hard constraints from onboarding preference_filters
+  const prefFilters = (tasteResult.rows[0]?.preference_filters ?? null) as {
+    exclude_top_n?: number;
+    preferred_origins?: string[];
+  } | null;
+  const excludeTopNSql = prefFilters?.exclude_top_n ? `AND np.count < ${Number(prefFilters.exclude_top_n)}` : '';
+
+  // Origins: request params override onboarding preferred_origins
+  const origins = params.origins
+    ? params.origins.split(',').map(s => s.trim()).filter(Boolean)
+    : (prefFilters?.preferred_origins ?? []);
+  const originSet = await getOriginNames(origins);
+  const originArr = originSet ? [...originSet] : null;
+  const originSql = (nextIdx: number) => originArr ? ` AND nv.name = ANY($${nextIdx}::text[])` : '';
+
+  // Resolve taste vector and blended query vector (partner blended when pairing)
+  let tasteVec: number[] | null  = null;  // user-only, used for reranker features
+  let blendedVec: number[] | null = null; // user+partner blend, used for ANN queries
 
   if (tasteResult.rows.length > 0) {
     tasteVec = parseVec(tasteResult.rows[0].embedding as unknown as string);
@@ -379,24 +392,37 @@ export async function getRecommendations(deviceId: string, params: Params) {
         `SELECT embedding FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}'`,
         [partnerDeviceId],
       );
-      queryVec = partnerTaste.rows.length > 0
-        ? blendVecs(tasteVec, parseVec(partnerTaste.rows[0].embedding as unknown as string))
-        : vecToStr(tasteVec);
+      blendedVec = partnerTaste.rows.length > 0
+        ? blendVecsArr(tasteVec, parseVec(partnerTaste.rows[0].embedding as unknown as string))
+        : tasteVec;
     } else {
-      queryVec = vecToStr(tasteVec);
+      blendedVec = tasteVec;
     }
   }
 
+  const likedCount = tasteResult.rows.length > 0 ? (tasteResult.rows[0].liked_count ?? 0) : 0;
+  const useANN     = blendedVec !== null && likedCount >= 3;
+
   let names: string[];
 
-  if (queryVec !== null && tasteVec !== null) {
-    const likedCount = tasteResult.rows[0].liked_count ?? 0;
+  if (!useANN) {
+    // ── Phase 0: log-weighted random sample (0–2 real likes) ─────────────────
+    const { rows } = await pool.query<{ name: string }>(
+      `SELECT nv.name
+       FROM   name_vectors nv
+       JOIN   ${NP_AGG} ON np.name = nv.name
+       WHERE  1=1 ${excl} ${filter} ${popFilter} ${excludeTopNSql}${originSql(2)}
+       AND    np.count >= 200
+       ORDER  BY LOG(np.count + 1) * (0.5 + RANDOM() * 0.5) DESC
+       LIMIT  ${LOG_SAMPLE_SIZE}`,
+      originArr ? [deviceId, originArr] : [deviceId],
+    );
+    names = rows.map(r => r.name);
 
-    const simWeight            = likedCount < 3 ? 0 : Math.min(1, (likedCount - 3) / 7);
-    const actualSimilaritySize = Math.round(SIMILARITY_SIZE * simWeight);
-    const extraSlots           = SIMILARITY_SIZE - actualSimilaritySize;
-    const actualPopularSize    = POPULAR_SIZE     + Math.round(extraSlots * 0.5);
-    const actualExplorationSize = EXPLORATION_SIZE + (extraSlots - Math.round(extraSlots * 0.5));
+  } else {
+    // ── Phase 1+: ANN similarity + anti-centroid exploration ──────────────────
+    const queryVec = vecToStr(blendedVec!);
+    const antiVec  = vecToStr(makeAntiCentroid(blendedVec!));
 
     // ── Determine query vectors (k-means multi-vector or single) ──────────────
     const k = likedCount >= CLUSTER_K_HIGH_THRESHOLD ? 3
@@ -436,46 +462,31 @@ export async function getRecommendations(deviceId: string, params: Params) {
 
     const tQueries = Date.now();
 
-    // ── ANN retrieval: K=100 per centroid, plus exploration and popular ───────
+    // ── ANN retrieval (per centroid) + anti-centroid exploration in parallel ──
     const annQueries = annQueryVecs.map(qv =>
-      actualSimilaritySize > 0
-        ? pool.query<{ name: string; embedding: string }>(
-            `SELECT nv.name, nv.embedding
-             FROM   name_vectors nv
-             JOIN   ${NP_AGG} ON np.name = nv.name
-             WHERE  1=1 ${excl} ${filter} ${popFilter}${originSql(3)}
-             ORDER  BY nv.embedding <=> $2::vector
-             LIMIT  $3`,
-            originArr ? [deviceId, qv, RETRIEVAL_K, originArr] : [deviceId, qv, RETRIEVAL_K],
-          )
-        : Promise.resolve({ rows: [] as { name: string; embedding: string }[] }),
+      pool.query<{ name: string; embedding: string; pop_count: string }>(
+        `SELECT nv.name, nv.embedding, np.count AS pop_count
+         FROM   name_vectors nv
+         JOIN   ${NP_AGG} ON np.name = nv.name
+         WHERE  1=1 ${excl} ${filter} ${popFilter} ${excludeTopNSql}${originSql(3)}
+         ORDER  BY nv.embedding <=> $2::vector
+         LIMIT  ${ANN_FETCH_K}`,
+        originArr ? [deviceId, qv, originArr] : [deviceId, qv],
+      )
     );
 
-    const [explorationResult, popularResult, ...annResults] = await Promise.all([
-      pool.query<{ name: string }>(
-        `SELECT nv.name
-         FROM   name_vectors nv
-         JOIN   ${NP_AGG} ON np.name = nv.name
-         WHERE  1=1 ${excl} ${filter} ${popFilter}
-         AND    np.count >= $3
-         AND    np.count < $4${originSql(6)}
-         ORDER  BY nv.embedding <=> $2::vector
-         LIMIT  $5`,
-        originArr
-          ? [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize, originArr]
-          : [deviceId, queryVec, EXPLORATION_MIN_COUNT, EXPLORATION_MAX_COUNT, actualExplorationSize],
-      ),
-      pool.query<{ name: string }>(
-        `SELECT nv.name
-         FROM   name_vectors nv
-         JOIN   ${NP_AGG} ON np.name = nv.name
-         WHERE  1=1 ${excl} ${filter} ${popFilter}${originSql(3)}
-         ORDER  BY np.count DESC
-         LIMIT  $2`,
-        originArr ? [deviceId, POPULAR_POOL, originArr] : [deviceId, POPULAR_POOL],
-      ),
-      ...annQueries,
-    ]);
+    const explorationQuery = pool.query<{ name: string }>(
+      `SELECT nv.name
+       FROM   name_vectors nv
+       JOIN   ${NP_AGG} ON np.name = nv.name
+       WHERE  1=1 ${excl} ${filter} ${popFilter} ${excludeTopNSql}${originSql(3)}
+       AND    np.count >= ${EXPLORE_MIN_COUNT}
+       ORDER  BY nv.embedding <=> $2::vector
+       LIMIT  ${EXPLORE_SIZE}`,
+      originArr ? [deviceId, antiVec, originArr] : [deviceId, antiVec],
+    );
+
+    const [explorationResult, ...annResults] = await Promise.all([explorationQuery, ...annQueries]);
 
     console.log(JSON.stringify({
       event: 'rec_queries', duration_ms: Date.now() - tQueries,
@@ -484,12 +495,11 @@ export async function getRecommendations(deviceId: string, params: Params) {
       counts: {
         ann_per_centroid: annResults.map(r => r.rows.length),
         exploration: explorationResult.rows.length,
-        popular: popularResult.rows.length,
       },
     }));
 
     // ── Round-robin interleave ANN results from all centroids ─────────────────
-    const annPool: Array<{ name: string; vec: number[] }> = [];
+    const annRaw: Array<{ name: string; vec: number[]; popCount: number }> = [];
     const annSeen = new Set<string>();
     const maxLen  = Math.max(...annResults.map(r => r.rows.length), 0);
     for (let i = 0; i < maxLen; i++) {
@@ -498,65 +508,44 @@ export async function getRecommendations(deviceId: string, params: Params) {
           const row = result.rows[i];
           if (!annSeen.has(row.name)) {
             annSeen.add(row.name);
-            annPool.push({ name: row.name, vec: parseVec(row.embedding as unknown as string) });
+            annRaw.push({
+              name: row.name,
+              vec: parseVec(row.embedding as unknown as string),
+              popCount: Number(row.pop_count) || 0,
+            });
           }
         }
       }
     }
 
-    // ── Rerank ANN pool with GBC (blended with cosine rank position) ──────────
-    const reranked = rerankPool(annPool, tasteVec);
-    const similarityNames = reranked.slice(0, actualSimilaritySize);
+    // ── Blend cosine rank with log-popularity, trim to RETRIEVAL_K ───────────
+    const logMax = Math.log(Math.max(...annRaw.map(c => c.popCount), 1) + 1);
+    const annPool = annRaw
+      .map((c, i) => {
+        const annScore = 1 - i / annRaw.length;
+        const logScore = Math.log(c.popCount + 1) / logMax;
+        return { ...c, blendScore: (1 - POP_PRIOR_ALPHA) * annScore + POP_PRIOR_ALPHA * logScore };
+      })
+      .sort((a, b) => b.blendScore - a.blendScore)
+      .slice(0, RETRIEVAL_K);
+
+    // ── Rerank similarity pool with GBC ───────────────────────────────────────
+    const reranked = rerankPool(annPool, tasteVec!);
+    const similarityNames = reranked.slice(0, SIM_SIZE);
     const seen = new Set(similarityNames);
 
-    // ── Exploration bucket (unchanged) ────────────────────────────────────────
+    // ── Exploration: anti-centroid ANN (deduplicated against similarity) ──────
     const explorationNames = explorationResult.rows
-      .map((r: { name: string }) => r.name)
-      .filter((n: string) => !seen.has(n));
-    explorationNames.forEach((n: string) => seen.add(n));
-
-    // ── Popular bucket: random shuffle for variety ────────────────────────────
-    const popularPool = popularResult.rows
-      .map((r: { name: string }) => r.name)
-      .filter((n: string) => !seen.has(n));
-    for (let i = popularPool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [popularPool[i], popularPool[j]] = [popularPool[j], popularPool[i]];
-    }
-    const popularNames = popularPool.slice(0, actualPopularSize);
+      .map(r => r.name)
+      .filter(n => !seen.has(n));
 
     // ── Merge and light shuffle ───────────────────────────────────────────────
-    const merged = [...similarityNames, ...explorationNames, ...popularNames];
+    const merged = [...similarityNames, ...explorationNames];
     for (let i = merged.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [merged[i], merged[j]] = [merged[j], merged[i]];
     }
     names = merged;
-
-  } else {
-    // ── Cold start ─────────────────────────────────────────────────────────────
-    const deck = COLD_START_DECK[ctx];
-    const swipedResult = await pool.query<{ name: string }>(
-      `SELECT name FROM user_swipes WHERE user_id = $1 AND sex_context = '${ctx}'`,
-      [deviceId],
-    );
-    const swiped = new Set(swipedResult.rows.map((r: { name: string }) => r.name));
-    names = popularityTiers.length === 0
-      ? deck.filter(n => !swiped.has(n) && (!originSet || originSet.has(n)))
-            .slice(0, SIMILARITY_SIZE + EXPLORATION_SIZE + POPULAR_SIZE)
-      : [];
-
-    if (names.length === 0) {
-      const { rows } = await pool.query<{ name: string }>(
-        `SELECT nv.name FROM name_vectors nv
-         JOIN ${NP_AGG} ON np.name = nv.name
-         WHERE 1=1 ${excl} ${filter} ${popFilter}${originSql(3)}
-         ORDER BY np.count DESC LIMIT $2`,
-        originArr ? [deviceId, COLD_START_LIMIT, originArr] : [deviceId, COLD_START_LIMIT],
-      );
-      names = rows.slice(0, SIMILARITY_SIZE + EXPLORATION_SIZE + POPULAR_SIZE)
-                  .map((r: { name: string }) => r.name);
-    }
   }
 
   const uniqueNames = [...new Set(names)];
@@ -602,8 +591,8 @@ export async function recordSwipe(deviceId: string, body: Record<string, unknown
     [deviceId, name, liked, sex_context],
   );
 
-  const tasteRow = await pool.query<{ embedding: string; liked_count: number; disliked_count: number }>(
-    'SELECT embedding, liked_count, disliked_count FROM user_taste WHERE user_id = $1 AND sex_context = $2',
+  const tasteRow = await pool.query<{ embedding: string; liked_count: number; disliked_count: number; onboarding_count: number }>(
+    'SELECT embedding, liked_count, disliked_count, onboarding_count FROM user_taste WHERE user_id = $1 AND sex_context = $2',
     [deviceId, sex_context],
   );
 
@@ -618,7 +607,8 @@ export async function recordSwipe(deviceId: string, body: Record<string, unknown
   } else {
     const row    = tasteRow.rows[0];
     const curVec = parseVec(row.embedding as unknown as string);
-    const total  = row.liked_count + row.disliked_count;
+    // Include onboarding_count so onboarding signal decays naturally as real swipes accumulate
+    const total  = row.liked_count + row.disliked_count + (row.onboarding_count ?? 0);
     newVec      = curVec.map((v, i) => (v * total + nameVec[i] * weight) / (total + 1));
     newLiked    = row.liked_count    + (liked ? 1 : 0);
     newDisliked = row.disliked_count + (liked ? 0 : 1);

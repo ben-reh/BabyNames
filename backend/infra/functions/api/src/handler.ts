@@ -3,6 +3,7 @@ import { getBatchNames, getNames, getName, getRankings, searchNames } from './ro
 import { getComparableNames, getNameRank, getPopularity } from './routes/popularity';
 import { createList, joinList, getList, addName, removeName, setSpellingOverride } from './routes/lists';
 import { getRecommendations, getUserSwipes, recordSwipe } from './routes/recommendations';
+import { processOnboarding } from './routes/onboarding';
 import { listTagDefs, listTagAssignments, createTag, deleteTag, setNameTags, getPartnerTags } from './routes/tags';
 import { migrateGuestData } from './routes/auth';
 import { recordConsultantFeedback } from './routes/consultant/feedback';
@@ -36,6 +37,13 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     // --- Auth routes ---
     if (method === 'POST' && path === '/auth/migrate') {
       return respond(await migrateGuestData(parseBody(event)));
+    }
+
+    // --- Onboarding ---
+    if (method === 'POST' && path === '/onboarding') {
+      const body = parseBody(event);
+      if (!body.deviceId) return respond(err(400, 'deviceId is required'));
+      return respond(await processOnboarding(body), { device_id: body.deviceId });
     }
 
     // --- Recommendations routes ---

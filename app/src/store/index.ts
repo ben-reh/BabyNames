@@ -14,6 +14,7 @@ interface SessionState {
   setSession: (s: { listId: string; deviceId: string; partnerRole: 'A' | 'B'; code: string }) => void;
   clearSession: () => void;
   setOnboardingDone: () => void;
+  resetOnboarding: () => void;
   setDefaultSex: (sex: 'M' | 'F') => void;
   setDeviceId: (deviceId: string, listId: string | null) => void;
   setBirthYear: (year: number) => void;
@@ -48,6 +49,7 @@ export const useSessionStore = create<SessionState>()(
       setSession: (s) => set(s),
       clearSession: () => set({ listId: null, deviceId: null, partnerRole: null, code: null, onboardingDone: false, defaultSex: null }),
       setOnboardingDone: () => set({ onboardingDone: true }),
+      resetOnboarding: () => set({ onboardingDone: false }),
       setDefaultSex: (sex) => set({ defaultSex: sex }),
       setDeviceId: (deviceId, listId) => set({ deviceId, listId, partnerRole: listId ? 'A' : null, code: null, onboardingDone: true }),
       setBirthYear: (year) => set({ birthYear: year }),

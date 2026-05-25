@@ -1,175 +1,186 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSwipeBack } from '../../src/components/SwipeBackScreen';
-import { useRecordSwipe } from '../../src/api/swipe';
+import { useOnboarding, type OnboardingAction } from '../../src/api/onboarding';
 import { useDeviceId } from '../../src/hooks/useDeviceId';
 import { useFilterStore } from '../../src/store';
 import { colors, fontSize, radius, spacing } from '../../src/constants/theme';
 
-const QUIZ_PAIRS: Record<string, [string, string][]> = {
-  F: [
-    ['Olivia', 'Harper'],
-    ['Charlotte', 'Sophia'],
-    ['Emma', 'Eleanor'],
-    ['Hazel', 'Kennedy'],
-    ['Josephine', 'Ailany'],
-  ],
-  M: [
-    ['Liam', 'Mateo'],
-    ['Oliver', 'Elijah'],
-    ['Lucas', 'Alexander'],
-    ['Matthew', 'John'],
-    ['Ethan', 'Cooper'],
-  ],
-  both: [
-    ['Jordan', 'Riley'],
-    ['Charlie', 'Quinn'],
-    ['Morgan', 'Parker'],
-    ['Rowan', 'Finley'],
-    ['River', 'Sage'],
-  ],
-};
-
-const ADVANCE_DELAY = 350;
+// Pre-computed via data/scripts/compute_onboarding_gallery.py (k=16 k-means on embedding space, count >= 500)
+const GALLERY = [
+  'Ryan', 'Alessandra', 'Amara', 'Kaden', 'Jose', 'Sarah',
+  'Mila', 'Alayah', 'Lily', 'Alani', 'Blake', 'Elijah',
+  'James', 'Elizabeth', 'Jay', 'Hunter',
+];
 
 export default function StyleQuiz() {
-  const router = useRouter();
-  const deviceId = useDeviceId();
-  const sex = useFilterStore((s) => s.sex);
-  const { mutate: recordSwipe } = useRecordSwipe();
+  const router    = useRouter();
+  const deviceId  = useDeviceId();
+  const sex       = useFilterStore((s) => s.sex);
+  const { mutate: onboard } = useOnboarding();
 
-  const pairKey = sex === 'F' ? 'F' : sex === 'M' ? 'M' : 'both';
-  const pairs = QUIZ_PAIRS[pairKey];
+  const [step, setStep]       = useState(0);
+  const [actions, setActions] = useState<OnboardingAction[]>([]);
+  const cardScale             = useRef(new Animated.Value(1)).current;
+  const panHandlers           = useSwipeBack();
 
-  const [step, setStep] = useState(0);
-  const [chosen, setChosen] = useState<string | null>(null);
-  const [locked, setLocked] = useState(false);
-  const panHandlers = useSwipeBack();
-
-  // Animated scale values for each card
-  const scaleLeft = useRef(new Animated.Value(1)).current;
-  const scaleRight = useRef(new Animated.Value(1)).current;
-
-  const accentColor = sex === 'F' ? colors.primary : sex === 'M' ? colors.secondary : colors.primary;
-
-  const handleChoose = (name: string, side: 'left' | 'right') => {
-    if (locked) return;
-    setLocked(true);
-    setChosen(name);
-
-    // Animate chosen card up
-    const targetScale = side === 'left' ? scaleLeft : scaleRight;
-    Animated.spring(targetScale, { toValue: 1.06, useNativeDriver: true, speed: 30 }).start();
-
-    // Fire-and-forget swipe recording
-    if (deviceId) {
-      recordSwipe({ deviceId, name, liked: true });
-    }
-
-    setTimeout(() => {
-      // Reset animation values for next pair
-      scaleLeft.setValue(1);
-      scaleRight.setValue(1);
-
-      const nextStep = step + 1;
-      if (nextStep >= pairs.length) {
-        router.push('/(onboarding)/popularity-filter');
-      } else {
-        setStep(nextStep);
-        setChosen(null);
-        setLocked(false);
-      }
-    }, ADVANCE_DELAY);
+  const animateTap = (cb: () => void) => {
+    Animated.sequence([
+      Animated.timing(cardScale, { toValue: 0.93, duration: 70, useNativeDriver: true }),
+      Animated.timing(cardScale, { toValue: 1,    duration: 0,  useNativeDriver: true }),
+    ]).start(cb);
   };
 
-  const currentPair = pairs[step];
+  const handleAction = (action: OnboardingAction['action']) => {
+    const next = [...actions, { name: GALLERY[step], action }];
+    animateTap(() => {
+      if (step + 1 >= GALLERY.length) {
+        setActions(next);
+        complete(next);
+      } else {
+        setActions(next);
+        setStep((s) => s + 1);
+      }
+    });
+  };
+
+  const complete = (allActions: OnboardingAction[]) => {
+    if (deviceId) {
+      onboard({ deviceId, sex, actions: allActions });
+    }
+    router.push('/(onboarding)/popularity-filter');
+  };
+
+  const currentName = GALLERY[step];
 
   return (
     <View style={styles.container} {...panHandlers}>
-      {/* Progress dots */}
-      <View style={styles.dotsRow}>
-        {pairs.map((_, i) => (
-          <View
-            key={i}
-            style={[styles.dot, i <= step && { backgroundColor: accentColor }]}
-          />
-        ))}
+      <View style={styles.header}>
+        <Text style={styles.counter}>{step + 1} / {GALLERY.length}</Text>
       </View>
 
-      <View style={styles.content}>
-        <Text style={styles.title}>Which feels more like you?</Text>
-        <Text style={styles.subtitle}>Pick your favourite from each pair</Text>
+      <View style={styles.nameArea}>
+        <Text style={styles.prompt}>What do you think of…</Text>
+        <Animated.View style={[styles.nameCard, { transform: [{ scale: cardScale }] }]}>
+          <Text style={styles.nameText}>{currentName}</Text>
+        </Animated.View>
+      </View>
 
-        <View style={styles.pairRow}>
-          <Animated.View style={{ transform: [{ scale: scaleLeft }], flex: 1 }}>
-            <TouchableOpacity
-              style={[
-                styles.nameCard,
-                chosen === currentPair[0] && { borderColor: accentColor, borderWidth: 2.5 },
-              ]}
-              onPress={() => handleChoose(currentPair[0], 'left')}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.nameText}>{currentPair[0]}</Text>
-            </TouchableOpacity>
-          </Animated.View>
+      <View style={styles.actions}>
+        <TouchableOpacity
+          style={styles.addBtn}
+          onPress={() => handleAction('add')}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.addBtnText}>Add to my list</Text>
+        </TouchableOpacity>
 
-          <Text style={styles.orText}>or</Text>
+        <TouchableOpacity
+          style={styles.vibeBtn}
+          onPress={() => handleAction('vibe')}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.vibeBtnText}>Like the vibe</Text>
+        </TouchableOpacity>
 
-          <Animated.View style={{ transform: [{ scale: scaleRight }], flex: 1 }}>
-            <TouchableOpacity
-              style={[
-                styles.nameCard,
-                chosen === currentPair[1] && { borderColor: accentColor, borderWidth: 2.5 },
-              ]}
-              onPress={() => handleChoose(currentPair[1], 'right')}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.nameText}>{currentPair[1]}</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        </View>
+        <TouchableOpacity
+          style={styles.skipBtn}
+          onPress={() => handleAction('skip')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.skipBtnText}>Skip</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: spacing.xl },
-  dotsRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingTop: spacing.md,
-    marginBottom: spacing.lg,
+  container: {
+    flex: 1,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xl,
+    justifyContent: 'space-between',
   },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: radius.full,
-    backgroundColor: colors.border,
-  },
-  content: { flex: 1, justifyContent: 'center', gap: spacing.lg },
-  title: { fontSize: fontSize.xl, fontWeight: '800', color: colors.text, textAlign: 'center' },
-  subtitle: { fontSize: fontSize.md, color: colors.textMuted, textAlign: 'center' },
-  pairRow: {
-    flexDirection: 'row',
+  header: {
     alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+  counter: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    fontWeight: '600',
+  },
+  nameArea: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: spacing.lg,
+  },
+  prompt: {
+    fontSize: fontSize.md,
+    color: colors.textMuted,
+    fontWeight: '500',
   },
   nameCard: {
     backgroundColor: colors.card,
-    borderRadius: radius.lg,
-    paddingVertical: spacing.xl,
-    paddingHorizontal: spacing.md,
+    borderRadius: radius.xl,
+    paddingVertical: spacing.xxl,
+    paddingHorizontal: spacing.xl,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
     borderColor: colors.border,
-    minHeight: 120,
+    width: '100%',
+    minHeight: 160,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  nameText: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text, textAlign: 'center' },
-  orText: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '500' },
+  nameText: {
+    fontSize: fontSize.xxl,
+    fontWeight: '800',
+    color: colors.text,
+    textAlign: 'center',
+  },
+  actions: {
+    gap: spacing.sm,
+  },
+  addBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.lg,
+    padding: spacing.md + 4,
+    alignItems: 'center',
+  },
+  addBtnText: {
+    color: '#fff',
+    fontSize: fontSize.md,
+    fontWeight: '700',
+  },
+  vibeBtn: {
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    padding: spacing.md + 4,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.border,
+  },
+  vibeBtnText: {
+    color: colors.text,
+    fontSize: fontSize.md,
+    fontWeight: '600',
+  },
+  skipBtn: {
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+  },
+  skipBtnText: {
+    color: colors.textMuted,
+    fontSize: fontSize.sm,
+    fontWeight: '500',
+  },
 });

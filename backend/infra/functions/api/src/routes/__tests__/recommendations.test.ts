@@ -47,42 +47,37 @@ beforeEach(() => {
 // ─── getRecommendations ────────────────────────────────────────────────────
 
 describe('getRecommendations', () => {
-  it('cold start — uses cold-start deck (no ANN query) when no taste vector exists', async () => {
-    // taste lookup → empty; swiped query → empty; everything else → default []
-
-    const result = await getRecommendations(FAKE_USER, {});
-
-    expect(result.statusCode).toBe(200);
-    const body = JSON.parse(result.body);
-    expect(body.names.length).toBeGreaterThan(0); // deck has 30 names
-
-    // ANN (<=> operator) must NOT appear — cold start never hits pgvector
-    expect(sqlCalls().some(s => s.includes('<=>'))).toBe(false);
-
-    // Swiped-names exclusion query must appear
-    expect(sqlCalls().some(s => s.includes('user_swipes') && s.includes('sex_context'))).toBe(true);
-  });
-
-  it('cold start — falls back to popularity-ordered query when deck is exhausted', async () => {
-    // Simulate all deck names already swiped
-    const ALL_DECK_NAMES = ['Riley','Jordan','Taylor','Quinn','Parker','Morgan','Avery','Charlie','Logan','Harper',
-                            'Blake','Finley','Rowan','Emerson','Elliot','Hayden','Peyton','Cameron','Reese','Drew',
-                            'Jamie','Skylar','Dakota','Scout','Sage','Ryan','Dylan','Casey','Marlowe','Sutton'];
-
+  it('phase 0 — log-weighted sample (no ANN) when no taste vector exists', async () => {
     mockQuery.mockImplementation((sql: string) => {
       if (sql.includes('FROM user_taste'))
-        return Promise.resolve({ rows: [] });
-      if (sql.includes('FROM user_swipes') && sql.includes('sex_context'))
-        return Promise.resolve({ rows: ALL_DECK_NAMES.map(name => ({ name })) });
-      // fallback cold-start popularity query
-      if (sql.includes('ORDER BY np.count DESC'))
-        return Promise.resolve({ rows: [{ name: 'Aria' }, { name: 'Luna' }] });
+        return Promise.resolve({ rows: [] }); // no taste → phase 0
+      if (sql.includes('LOG(np.count + 1)'))
+        return Promise.resolve({ rows: [{ name: 'Emma' }, { name: 'Olivia' }] });
       return Promise.resolve({ rows: [] });
     });
 
-    const result = await getRecommendations(FAKE_USER, { sex: 'U' });
+    const result = await getRecommendations(FAKE_USER, {});
     expect(result.statusCode).toBe(200);
-    expect(sqlCalls().some(s => s.includes('name_popularity') && s.includes('np.count DESC'))).toBe(true);
+    const body = JSON.parse(result.body);
+    expect(body.names.length).toBeGreaterThan(0);
+
+    expect(sqlCalls().some(s => s.includes('LOG(np.count + 1)'))).toBe(true);
+    // ANN (<=> operator) must NOT appear — phase 0 never hits pgvector
+    expect(sqlCalls().some(s => s.includes('<=>'))).toBe(false);
+  });
+
+  it('phase 0 — log-weighted sample (no ANN) when liked_count < 3', async () => {
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes('FROM user_taste'))
+        return Promise.resolve({ rows: [{ embedding: FAKE_EMBEDDING, liked_count: 2 }] });
+      return Promise.resolve({ rows: [] });
+    });
+
+    const result = await getRecommendations(FAKE_USER, {});
+    expect(result.statusCode).toBe(200);
+
+    expect(sqlCalls().some(s => s.includes('LOG(np.count + 1)'))).toBe(true);
+    expect(sqlCalls().some(s => s.includes('<=>'))).toBe(false);
   });
 
   it('warm path — ANN query selects embedding column for reranker', async () => {
@@ -105,7 +100,7 @@ describe('getRecommendations', () => {
     expect(annSql).toMatch(/LIMIT/);
   });
 
-  it('warm path — retrieval pool is K=100', async () => {
+  it('warm path — ANN query fetches ANN_FETCH_K=400 as SQL literal', async () => {
     mockQuery.mockImplementation((sql: string) => {
       if (sql.includes('FROM user_taste'))
         return Promise.resolve({ rows: [{ embedding: FAKE_EMBEDDING, liked_count: 5 }] });
@@ -116,10 +111,8 @@ describe('getRecommendations', () => {
 
     const annSql = sqlCalls().find(s => s.includes('<=>') && s.includes('nv.embedding'));
     expect(annSql).toBeDefined();
-    // K=100 is passed as the $3 param — confirm LIMIT $3 pattern
-    expect(annSql).toMatch(/LIMIT\s+\$3/);
-    const annArgs = mockQuery.mock.calls.find(c => (c[0] as string).includes('<=>') && (c[0] as string).includes('nv.embedding'))?.[1] as unknown[];
-    expect(annArgs?.[2]).toBe(100);
+    // ANN_FETCH_K=400 is embedded as a literal (avoids $-param numbering conflict)
+    expect(annSql).toMatch(/LIMIT\s+400/);
   });
 
   it('warm path — applies F sex filter in ANN query', async () => {
