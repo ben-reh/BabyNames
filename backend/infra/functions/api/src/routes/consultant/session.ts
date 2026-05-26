@@ -6,9 +6,9 @@ import { ok, err } from '../../utils';
 import { buildProfileSummaryPrompt, buildVibeTranslationPrompt, buildNameDescriptionsPrompt } from './prompts';
 
 const LISTS_TABLE = 'Lists';
-const MODEL_SUMMARY     = 'anthropic.claude-3-5-sonnet-20241022-v2:0'; // profile prose — quality matters
-const MODEL_VIBE        = 'amazon.nova-micro-v1:0';                    // JSON extraction only
-const MODEL_DESCRIPTIONS = 'anthropic.claude-3-haiku-20240307-v1:0';  // personalized copy, high volume
+const MODEL_SUMMARY      = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'; // profile prose — quality matters
+const MODEL_VIBE         = 'amazon.nova-micro-v1:0';                       // JSON extraction only
+const MODEL_DESCRIPTIONS = 'amazon.nova-micro-v1:0';                      // personalized copy, high volume
 const RESULT_SIZE = 15;
 
 const UNISEX_MIN = 0.05;
