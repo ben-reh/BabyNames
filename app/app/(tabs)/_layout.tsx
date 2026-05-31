@@ -46,7 +46,7 @@ export default function TabsLayout() {
           name="swipe"
           options={{
             title: 'Discover',
-            tabBarIcon: ({ color, size }) => <Ionicons name="heart" size={size} color={color} />,
+            tabBarIcon: ({ color, size }) => <Ionicons name="search" size={size} color={color} />,
           }}
         />
         <Tabs.Screen
@@ -60,7 +60,7 @@ export default function TabsLayout() {
           name="my-list"
           options={{
             title: 'My Names',
-            tabBarIcon: ({ color, size }) => <Ionicons name="bookmark" size={size} color={color} />,
+            tabBarIcon: ({ color, size }) => <Ionicons name="heart" size={size} color={color} />,
           }}
         />
         <Tabs.Screen

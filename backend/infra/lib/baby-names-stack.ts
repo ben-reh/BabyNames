@@ -212,7 +212,8 @@ export class BabyNamesStack extends cdk.Stack {
         // Underlying foundation models invoked by the inference profiles
         `arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0`,
         `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
-        // Nova Micro (on-demand, no profile needed)
+        // Nova models (on-demand, no profile needed)
+        `arn:aws:bedrock:${this.region}::foundation-model/amazon.nova-pro-v1:0`,
         `arn:aws:bedrock:${this.region}::foundation-model/amazon.nova-micro-v1:0`,
       ],
     }));

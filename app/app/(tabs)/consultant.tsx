@@ -166,13 +166,13 @@ export default function ConsultantScreen() {
   function handleLike(name: string) {
     if (!deviceId || votes[name]) return;
     setVotes((v) => ({ ...v, [name]: 'like' }));
-    sendFeedback({ deviceId, likes: [name], passes: [] });
+    sendFeedback({ deviceId, likes: [name], passes: [], sex });
   }
 
   function handlePass(name: string) {
     if (!deviceId || votes[name]) return;
     setVotes((v) => ({ ...v, [name]: 'pass' }));
-    sendFeedback({ deviceId, likes: [], passes: [name] });
+    sendFeedback({ deviceId, likes: [], passes: [name], sex });
   }
 
   const currentSession = session;
@@ -227,7 +227,7 @@ export default function ConsultantScreen() {
                   />
                   <TouchableOpacity
                     style={[styles.generateBtn, isPending && styles.generateBtnDisabled]}
-                    onPress={handleGenerate}
+                    onPress={() => handleGenerate()}
                     disabled={isPending}
                   >
                     {phase === 'loading' ? (

@@ -25,6 +25,7 @@ interface ConsultantFeedbackRequest {
   deviceId: string;
   likes: string[];
   passes: string[];
+  sex?: string;
 }
 
 export function useConsultantSession() {

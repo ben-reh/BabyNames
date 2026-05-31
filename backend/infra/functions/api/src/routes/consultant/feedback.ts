@@ -5,6 +5,8 @@ export async function recordConsultantFeedback(body: Record<string, unknown>) {
   const deviceId = body.deviceId as string | undefined;
   const likes = (body.likes as string[] | undefined) ?? [];
   const passes = (body.passes as string[] | undefined) ?? [];
+  const sex = body.sex as string | undefined;
+  const sexCtx = (sex === 'F' || sex === 'M' || sex === 'U') ? sex : 'U';
 
   if (!deviceId) return err(400, 'deviceId is required');
   if (!Array.isArray(likes) || !Array.isArray(passes)) {
@@ -39,7 +41,7 @@ export async function recordConsultantFeedback(body: Record<string, unknown>) {
      VALUES ${swipePlaceholders}
      ON CONFLICT (user_id, name, sex_context)
      DO UPDATE SET liked = EXCLUDED.liked, swiped_at = NOW()`,
-    swipeList.flatMap((s) => [deviceId, s.name, s.liked, 'U']),
+    swipeList.flatMap((s) => [deviceId, s.name, s.liked, sexCtx]),
   );
 
   // Read current taste vector and apply all swipes in a single pass
@@ -49,7 +51,7 @@ export async function recordConsultantFeedback(body: Record<string, unknown>) {
     disliked_count: number;
   }>(
     'SELECT embedding, liked_count, disliked_count FROM user_taste WHERE user_id = $1 AND sex_context = $2',
-    [deviceId, 'U'],
+    [deviceId, sexCtx],
   );
 
   let curVec: number[] | null = tasteRows[0]
@@ -83,7 +85,7 @@ export async function recordConsultantFeedback(body: Record<string, unknown>) {
        liked_count    = EXCLUDED.liked_count,
        disliked_count = EXCLUDED.disliked_count,
        updated_at     = NOW()`,
-    [deviceId, 'U', `[${curVec.join(',')}]`, likedCount, dislikedCount],
+    [deviceId, sexCtx, `[${curVec.join(',')}]`, likedCount, dislikedCount],
   );
 
   return ok({ ok: true });
