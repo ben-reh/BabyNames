@@ -8,7 +8,8 @@ export interface Name {
   year_peak: number | null;
   total_count: number | null;
   female_pct: number | null;
-  vibe_names: string[];
+  vibe_names_f: string[];
+  vibe_names_m: string[];
   phonetic_names: string[];
   spelling_variants: string[];
 }

@@ -12,7 +12,8 @@ export interface NameResult {
   rank: number | null;
   origin: string | null;
   year_peak: number | null;
-  vibe_names: string[];
+  vibe_names_f: string[];
+  vibe_names_m: string[];
 }
 
 export interface ChatResponse {

@@ -17,7 +17,8 @@ export function formatName(item: Record<string, unknown>) {
     year_peak: item.year_peak ? Number(item.year_peak) : null,
     total_count: item.total_count ? Number(item.total_count) : null,
     female_pct: item.female_pct ? Number(item.female_pct) : null,
-    vibe_names: (item.vibe_names as string[]) || [],
+    vibe_names_f: (item.vibe_names_f as string[]) || [],
+    vibe_names_m: (item.vibe_names_m as string[]) || [],
     phonetic_names: (item.phonetic_names as string[]) || [],
     spelling_variants: item.spelling_variants
       ? (item.spelling_variants as string).split(' ').filter(Boolean)
@@ -77,14 +78,15 @@ export async function getNames(params: Params) {
           RequestItems: {
             [TABLE]: {
               Keys: keys,
-              ProjectionExpression: '#n, vibe_names',
+              ProjectionExpression: '#n, vibe_names_f, vibe_names_m',
               ExpressionAttributeNames: { '#n': 'name' },
             },
           },
         }));
-        const liked = (batch.Responses?.[TABLE] ?? []) as Array<{ name: string; vibe_names?: string[] }>;
+        const liked = (batch.Responses?.[TABLE] ?? []) as Array<{ name: string; vibe_names_f?: string[]; vibe_names_m?: string[] }>;
+        const vibeField = sex === 'M' ? 'vibe_names_m' : 'vibe_names_f';
         for (const item of liked) {
-          for (const s of item.vibe_names ?? []) {
+          for (const s of item[vibeField] ?? []) {
             similarityScores.set(s, (similarityScores.get(s) ?? 0) + 1);
           }
         }

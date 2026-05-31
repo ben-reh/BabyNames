@@ -286,18 +286,21 @@ export default function NameDetail() {
           </View>
         )}
 
-        {(nameData.vibe_names?.length ?? 0) > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>You might also like</Text>
-            <View style={styles.chips}>
-              {(nameData.vibe_names ?? []).slice(0, 10).map((n) => (
-                <TouchableOpacity key={n} style={styles.chip} onPress={() => router.replace(`/name/${n}`)}>
-                  <Text style={styles.chipText}>{n}</Text>
-                </TouchableOpacity>
-              ))}
+        {(() => {
+          const vibeNames = sexParam === 'M' ? (nameData.vibe_names_m ?? []) : (nameData.vibe_names_f ?? []);
+          return vibeNames.length > 0 ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>You might also like</Text>
+              <View style={styles.chips}>
+                {vibeNames.slice(0, 10).map((n) => (
+                  <TouchableOpacity key={n} style={styles.chip} onPress={() => router.replace(`/name/${n}?sex=${sexParam ?? 'F'}`)}>
+                    <Text style={styles.chipText}>{n}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
-          </View>
-        )}
+          ) : null;
+        })()}
 
         {(nameData.phonetic_names?.length ?? 0) > 0 && (
           <View style={styles.section}>

@@ -6,9 +6,9 @@ import { ok, err } from '../../utils';
 import { buildProfileSummaryPrompt, buildVibeTranslationPrompt, buildNameDescriptionsPrompt } from './prompts';
 
 const LISTS_TABLE = 'Lists';
-const MODEL_SUMMARY      = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'; // profile prose — quality matters
-const MODEL_VIBE         = 'amazon.nova-micro-v1:0';                       // JSON extraction only
-const MODEL_DESCRIPTIONS = 'amazon.nova-micro-v1:0';                      // personalized copy, high volume
+const MODEL_SUMMARY      = 'amazon.nova-pro-v1:0';   // profile prose — quality matters
+const MODEL_VIBE         = 'amazon.nova-micro-v1:0'; // JSON extraction only
+const MODEL_DESCRIPTIONS = 'amazon.nova-micro-v1:0'; // personalized copy, high volume
 const RESULT_SIZE = 15;
 
 const UNISEX_MIN = 0.05;
@@ -16,12 +16,14 @@ const UNISEX_MAX = 0.95;
 const SEX_FILTER_F = 0.05;
 const SEX_FILTER_M = 0.95;
 
-const NP_AGG = `(SELECT name, SUM(count) AS count, SUM(CASE WHEN gender='F' THEN count ELSE 0 END)::float / NULLIF(SUM(count),0) AS female_pct FROM name_popularity WHERE year = 2025 GROUP BY name) np`;
+const NP_AGG = `(SELECT name, SUM(count) AS count, SUM(CASE WHEN gender='F' THEN count ELSE 0 END) AS female_count, SUM(CASE WHEN gender='F' THEN count ELSE 0 END)::float / NULLIF(SUM(count),0) AS female_pct FROM name_popularity WHERE year = 2025 GROUP BY name) np`;
+
+const SEX_COUNT_MIN = 100;
 
 function sexClause(sex: string | undefined): string {
   const pct = `COALESCE(np.female_pct, nv.female_pct, 0.5)`;
-  if (sex === 'F') return `AND ${pct} >= ${SEX_FILTER_F}`;
-  if (sex === 'M') return `AND ${pct} <= ${SEX_FILTER_M}`;
+  if (sex === 'F') return `AND ${pct} >= ${SEX_FILTER_F} AND np.female_count >= ${SEX_COUNT_MIN}`;
+  if (sex === 'M') return `AND ${pct} <= ${SEX_FILTER_M} AND (np.count - np.female_count) >= ${SEX_COUNT_MIN}`;
   if (sex === 'U') return `AND ${pct} > ${UNISEX_MIN} AND ${pct} < ${UNISEX_MAX}`;
   return '';
 }

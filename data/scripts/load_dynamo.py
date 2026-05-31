@@ -23,7 +23,8 @@ def load_similar(path):
     with open(path) as f:
         for row in csv.DictReader(f):
             similar[row['name']] = {
-                'vibe_names': json.loads(row.get('vibe_names', '[]')),
+                'vibe_names_f': json.loads(row.get('vibe_names_f', '[]')),
+                'vibe_names_m': json.loads(row.get('vibe_names_m', '[]')),
                 'phonetic_names': json.loads(row.get('phonetic_names', '[]')),
             }
     return similar
@@ -42,8 +43,10 @@ def to_item(row, similar):
         else:
             item[key] = val
     if similar:
-        if similar.get('vibe_names'):
-            item['vibe_names'] = similar['vibe_names']
+        if similar.get('vibe_names_f'):
+            item['vibe_names_f'] = similar['vibe_names_f']
+        if similar.get('vibe_names_m'):
+            item['vibe_names_m'] = similar['vibe_names_m']
         if similar.get('phonetic_names'):
             item['phonetic_names'] = similar['phonetic_names']
     return item
