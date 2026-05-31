@@ -46,10 +46,15 @@ function vSex(sex: string | undefined): 'F' | 'M' | 'U' {
   return sex === 'F' || sex === 'M' || sex === 'U' ? sex : 'U';
 }
 
+// Minimum absolute births/yr required to count as genuinely given to that sex.
+// Prevents names like "Dan" (9 girls/yr) from appearing in girls recs while
+// keeping unisex names like Dylan (337 girls/yr) and Carter (679 girls/yr).
+const SEX_COUNT_MIN = 100;
+
 function sexClause(sex: string | undefined): string {
   const pct = `COALESCE(np.female_pct, nv.female_pct, 0.5)`;
-  if (sex === 'F') return `AND ${pct} >= ${SEX_FILTER_F}`;
-  if (sex === 'M') return `AND ${pct} <= ${SEX_FILTER_M}`;
+  if (sex === 'F') return `AND ${pct} >= ${SEX_FILTER_F} AND np.female_count >= ${SEX_COUNT_MIN}`;
+  if (sex === 'M') return `AND ${pct} <= ${SEX_FILTER_M} AND (np.count - np.female_count) >= ${SEX_COUNT_MIN}`;
   if (sex === 'U') return `AND ${pct} > ${UNISEX_MIN} AND ${pct} < ${UNISEX_MAX}`;
   return '';
 }
@@ -66,6 +71,7 @@ function popularityClause(tiers: string[]): string {
 const NP_AGG = `(
   SELECT name,
          SUM(count)                                                               AS count,
+         SUM(CASE WHEN gender='F' THEN count ELSE 0 END)                         AS female_count,
          SUM(CASE WHEN gender='F' THEN count ELSE 0 END)::float / NULLIF(SUM(count),0) AS female_pct
   FROM   name_popularity WHERE year = 2025 GROUP BY name
 ) np`;
@@ -114,17 +120,18 @@ function makeAntiCentroid(vec: number[]): number[] {
 }
 
 // ── K-means++ ────────────────────────────────────────────────────────────────
-function kmeanspp(vectors: number[][], k: number, maxIter = 20): number[][] {
+// rng is exposed so callers (and tests) can seed it; defaults to Math.random.
+export function kmeanspp(vectors: number[][], k: number, maxIter = 20, rng: () => number = Math.random): number[][] {
   const n = vectors.length;
   if (n <= k) return vectors.slice();
   const dim = vectors[0].length;
 
   // k-means++ seeding
-  const centroids: number[][] = [vectors[Math.floor(Math.random() * n)]];
+  const centroids: number[][] = [vectors[Math.floor(rng() * n)]];
   for (let c = 1; c < k; c++) {
     const dists = vectors.map(v => Math.min(...centroids.map(cen => sqDist(v, cen))));
     const total = dists.reduce((a, b) => a + b, 0);
-    let r = Math.random() * total;
+    let r = rng() * total;
     let chosen = n - 1;
     for (let i = 0; i < n; i++) { r -= dists[i]; if (r <= 0) { chosen = i; break; } }
     centroids.push(vectors[chosen]);
@@ -147,6 +154,45 @@ function kmeanspp(vectors: number[][], k: number, maxIter = 20): number[][] {
     if (!changed) break;
   }
   return centroids;
+}
+
+// Given the user's liked-name vectors, return k query vectors for ANN retrieval:
+//   - run k-means++, take the cluster centroids
+//   - replace each centroid with the actual liked vector closest to it (style preservation)
+//   - 50/50-blend with partner taste if pairing is active
+// If there aren't enough liked vectors, returns an empty array (caller falls back).
+export function pickCentroidQueries(
+  likedVecs: number[][],
+  k: number,
+  partnerTasteVec: number[] | null,
+  rng: () => number = Math.random,
+): number[][] {
+  if (likedVecs.length < k) return [];
+  const centroids = kmeanspp(likedVecs, k, 20, rng);
+  return centroids.map(centroid => {
+    let best = likedVecs[0];
+    let bestDist = sqDist(likedVecs[0], centroid);
+    for (const v of likedVecs) {
+      const d = sqDist(v, centroid);
+      if (d < bestDist) { bestDist = d; best = v; }
+    }
+    return partnerTasteVec ? blendVecsArr(best, partnerTasteVec) : best;
+  });
+}
+
+// In-place bounded-window shuffle. Each position swaps with a random j in
+// [i-window, i+window]. Adds local variety without globally scrambling the
+// ranking (note: chained forward swaps can drift items beyond ±window).
+// window=0 leaves the array unchanged.
+export function boundedShuffle<T>(arr: T[], window: number, rng: () => number = Math.random): T[] {
+  if (window <= 0 || arr.length <= 1) return arr;
+  for (let i = 0; i < arr.length; i++) {
+    const lo = Math.max(0, i - window);
+    const hi = Math.min(arr.length - 1, i + window);
+    const j  = lo + Math.floor(rng() * (hi - lo + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
 // ── GBC reranker ─────────────────────────────────────────────────────────────
@@ -210,23 +256,25 @@ function rerankerFeatures(
 }
 
 // Rerank a pool of candidates against a taste vector.
-// Returns names sorted best-first (blend of cosine rank + GBC score).
+// Returns names sorted best-first: blend of GBC reranker score and an
+// ANN-retrieval-rank prior (`rankScore`). `bestAnnRank` is the candidate's
+// minimum rank across k-means centroids during retrieval — i.e. how strong a
+// raw cosine match it was, before the pop-prior blend re-sorted the pool.
 function rerankPool(
-  pool: Array<{ name: string; vec: number[] }>,
+  pool: Array<{ name: string; vec: number[]; bestAnnRank: number }>,
   tasteVec: number[],
 ): string[] {
   if (pool.length === 0) return [];
   const tasteNorm    = l2norm(tasteVec);
   const tasteEmbNorm = l2norm(tasteVec.slice(HC_DIMS, HC_DIMS + EMBED_DIMS));
-  const n = pool.length;
 
-  const scored = pool.map(({ name, vec }, rank) => {
+  const scored = pool.map(({ name, vec, bestAnnRank }) => {
     const candNorm    = l2norm(vec);
     const candEmbNorm = l2norm(vec.slice(HC_DIMS, HC_DIMS + EMBED_DIMS));
     const features    = rerankerFeatures(tasteVec, tasteNorm, tasteEmbNorm, vec, candNorm, candEmbNorm);
     const rScore      = rerankerScore(features);
-    const cosScore    = 1 - rank / n; // 1.0 for first ANN result, approaching 0
-    return { name, score: BLEND * cosScore + (1 - BLEND) * rScore };
+    const rankScore   = 1 - bestAnnRank / ANN_FETCH_K; // 1.0 if first ANN result on any centroid, approaching 0
+    return { name, score: BLEND * rankScore + (1 - BLEND) * rScore };
   });
 
   scored.sort((a, b) => b.score - a.score);
@@ -257,7 +305,17 @@ async function getOriginNames(origins: string[]): Promise<Set<string> | null> {
 let schemaMigrated = false;
 async function ensureSchema(pool: ReturnType<typeof getPool>) {
   if (schemaMigrated) return;
-  const run = async (sql: string) => { try { await pool.query(sql); } catch { /* already applied */ } };
+  // Only swallow PG idempotency codes; anything else is a real failure and must surface.
+  //   42701 = duplicate_column, 42710 = duplicate_object (constraint/index), 42P07 = duplicate_table
+  const run = async (sql: string) => {
+    try { await pool.query(sql); }
+    catch (e: unknown) {
+      const code = (e as { code?: string }).code;
+      if (code === '42701' || code === '42710' || code === '42P07') return;
+      console.error(JSON.stringify({ event: 'migration_failed', sql, code, error: String(e) }));
+      throw e;
+    }
+  };
 
   await run(`ALTER TABLE user_swipes ADD COLUMN IF NOT EXISTS sex_context TEXT`);
   await run(`UPDATE user_swipes SET sex_context = 'U' WHERE sex_context IS NULL`);
@@ -274,18 +332,32 @@ async function ensureSchema(pool: ReturnType<typeof getPool>) {
   await run(`ALTER TABLE user_taste ADD COLUMN IF NOT EXISTS onboarding_count FLOAT NOT NULL DEFAULT 0`);
   await run(`ALTER TABLE user_taste ADD COLUMN IF NOT EXISTS preference_filters JSONB`);
 
-  // Wipe and retype user_taste.embedding if dimension doesn't match new vectors
-  await pool.query(`DO $$
-    DECLARE col_type text;
-    BEGIN
-      SELECT pg_catalog.format_type(atttypid, atttypmod) INTO col_type
-      FROM pg_attribute
-      WHERE attrelid = 'user_taste'::regclass AND attname = 'embedding' AND NOT attisdropped;
-      IF col_type IS DISTINCT FROM 'vector(${VECTOR_DIM})' THEN
-        TRUNCATE user_taste;
-        EXECUTE 'ALTER TABLE user_taste ALTER COLUMN embedding TYPE vector(${VECTOR_DIM})';
-      END IF;
-    END $$`);
+  // Vector-dim guard. Previously this branch unconditionally TRUNCATEd user_taste on
+  // any dim mismatch — one bad VECTOR_DIM constant on deploy would wipe every taste
+  // vector with no warning. Require explicit opt-in via ALLOW_TASTE_TRUNCATE=true.
+  const colTypeResult = await pool.query<{ col_type: string }>(`
+    SELECT pg_catalog.format_type(atttypid, atttypmod) AS col_type
+    FROM pg_attribute
+    WHERE attrelid = 'user_taste'::regclass AND attname = 'embedding' AND NOT attisdropped
+  `);
+  const colType = colTypeResult.rows[0]?.col_type;
+  if (colType && colType !== `vector(${VECTOR_DIM})`) {
+    if (process.env.ALLOW_TASTE_TRUNCATE === 'true') {
+      console.warn(JSON.stringify({
+        event: 'taste_truncate', stored: colType, expected: `vector(${VECTOR_DIM})`,
+      }));
+      await pool.query('TRUNCATE user_taste');
+      await pool.query(`ALTER TABLE user_taste ALTER COLUMN embedding TYPE vector(${VECTOR_DIM})`);
+    } else {
+      console.error(JSON.stringify({
+        event: 'taste_dim_mismatch_blocked', stored: colType, expected: `vector(${VECTOR_DIM})`,
+      }));
+      throw new Error(
+        `user_taste.embedding dimension mismatch (stored ${colType}, expected vector(${VECTOR_DIM})). ` +
+        `Refusing to TRUNCATE. Set ALLOW_TASTE_TRUNCATE=true to wipe and rebuild.`,
+      );
+    }
+  }
 
   schemaMigrated = true;
 }
@@ -382,8 +454,9 @@ export async function getRecommendations(deviceId: string, params: Params) {
   const originSql = (nextIdx: number) => originArr ? ` AND nv.name = ANY($${nextIdx}::text[])` : '';
 
   // Resolve taste vector and blended query vector (partner blended when pairing)
-  let tasteVec: number[] | null  = null;  // user-only, used for reranker features
-  let blendedVec: number[] | null = null; // user+partner blend, used for ANN queries
+  let tasteVec: number[] | null        = null;  // user-only, used for reranker features
+  let partnerTasteVec: number[] | null = null;  // partner-only, used to blend per-centroid query at k>1
+  let blendedVec: number[] | null      = null;  // user+partner blend, used for single-vector ANN
 
   if (tasteResult.rows.length > 0) {
     tasteVec = parseVec(tasteResult.rows[0].embedding as unknown as string);
@@ -392,9 +465,12 @@ export async function getRecommendations(deviceId: string, params: Params) {
         `SELECT embedding FROM user_taste WHERE user_id = $1 AND sex_context = '${ctx}'`,
         [partnerDeviceId],
       );
-      blendedVec = partnerTaste.rows.length > 0
-        ? blendVecsArr(tasteVec, parseVec(partnerTaste.rows[0].embedding as unknown as string))
-        : tasteVec;
+      if (partnerTaste.rows.length > 0) {
+        partnerTasteVec = parseVec(partnerTaste.rows[0].embedding as unknown as string);
+        blendedVec      = blendVecsArr(tasteVec, partnerTasteVec);
+      } else {
+        blendedVec = tasteVec;
+      }
     } else {
       blendedVec = tasteVec;
     }
@@ -438,24 +514,9 @@ export async function getRecommendations(deviceId: string, params: Params) {
          WHERE us.user_id = $1 AND us.liked = true AND us.sex_context = '${ctx}'`,
         [deviceId],
       );
-      const likedVecs = likedVecResult.rows.map(r => parseVec(r.embedding as unknown as string));
-      if (likedVecs.length >= k) {
-        // Use the closest actual liked name to each centroid rather than the centroid
-        // itself — averaging destroys style signal (e.g. Stella's vintage cluster
-        // collapses into generic popular names when blended with Luna/Nova).
-        const centroids = kmeanspp(likedVecs, k);
-        annQueryVecs = centroids.map(centroid => {
-          let best = likedVecs[0];
-          let bestDist = sqDist(likedVecs[0], centroid);
-          for (const v of likedVecs) {
-            const d = sqDist(v, centroid);
-            if (d < bestDist) { bestDist = d; best = v; }
-          }
-          return vecToStr(best);
-        });
-      } else {
-        annQueryVecs = [queryVec];
-      }
+      const likedVecs       = likedVecResult.rows.map(r => parseVec(r.embedding as unknown as string));
+      const centroidQueries = pickCentroidQueries(likedVecs, k, partnerTasteVec);
+      annQueryVecs = centroidQueries.length > 0 ? centroidQueries.map(vecToStr) : [queryVec];
     } else {
       annQueryVecs = [queryVec];
     }
@@ -499,7 +560,11 @@ export async function getRecommendations(deviceId: string, params: Params) {
     }));
 
     // ── Round-robin interleave ANN results from all centroids ─────────────────
-    const annRaw: Array<{ name: string; vec: number[]; popCount: number }> = [];
+    // Each name's bestAnnRank is its lowest per-centroid index across all centroids
+    // it appeared in (i.e., its strongest raw retrieval signal). Because the loop
+    // iterates i = 0..maxLen-1 and adds names on first appearance, that first-seen
+    // index is necessarily the min rank for that name across the centroids it hit.
+    const annRaw: Array<{ name: string; vec: number[]; popCount: number; bestAnnRank: number }> = [];
     const annSeen = new Set<string>();
     const maxLen  = Math.max(...annResults.map(r => r.rows.length), 0);
     for (let i = 0; i < maxLen; i++) {
@@ -512,13 +577,14 @@ export async function getRecommendations(deviceId: string, params: Params) {
               name: row.name,
               vec: parseVec(row.embedding as unknown as string),
               popCount: Number(row.pop_count) || 0,
+              bestAnnRank: i,
             });
           }
         }
       }
     }
 
-    // ── Blend cosine rank with log-popularity, trim to RETRIEVAL_K ───────────
+    // ── Blend retrieval rank with log-popularity, trim to RETRIEVAL_K ────────
     const logMax = Math.log(Math.max(...annRaw.map(c => c.popCount), 1) + 1);
     const annPool = annRaw
       .map((c, i) => {
@@ -539,13 +605,10 @@ export async function getRecommendations(deviceId: string, params: Params) {
       .map(r => r.name)
       .filter(n => !seen.has(n));
 
-    // ── Merge and light shuffle ───────────────────────────────────────────────
-    const merged = [...similarityNames, ...explorationNames];
-    for (let i = merged.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [merged[i], merged[j]] = [merged[j], merged[i]];
-    }
-    names = merged;
+    // ── Merge and bounded-window shuffle ──────────────────────────────────────
+    // Add local variety without burying the strongest reranked candidates.
+    const SHUFFLE_WINDOW = 3;
+    names = boundedShuffle([...similarityNames, ...explorationNames], SHUFFLE_WINDOW);
   }
 
   const uniqueNames = [...new Set(names)];
@@ -565,6 +628,68 @@ export async function getUserSwipes(deviceId: string, liked: boolean, sex?: stri
   return ok({ names: rows.map((r: { name: string }) => r.name) });
 }
 
+// Snapshot of the stored user_taste row, after parsing the embedding column.
+export interface TasteSnapshot {
+  embedding: number[];
+  liked_count: number;
+  disliked_count: number;
+  onboarding_count: number;
+}
+
+export interface TasteUpdate {
+  newVec: number[];
+  newLiked: number;
+  newDisliked: number;
+}
+
+// Pure: given the current taste state and the prior swipe direction for this
+// name, return the updated taste vector and counts after applying `liked`.
+//
+//   current === null         → first-ever swipe; produces weight * nameVec.
+//   priorLiked === null      → brand-new swipe for this name; add contribution.
+//   priorLiked === liked     → same-direction re-swipe; no-op.
+//   priorLiked !== liked     → flip; reverse prior contribution and add new one.
+//
+// Denominator on flip stays at `total` because we're replacing, not adding.
+export function computeTasteUpdate(
+  current: TasteSnapshot | null,
+  priorLiked: boolean | null,
+  nameVec: number[],
+  liked: boolean,
+): TasteUpdate {
+  const newWeight = liked ? 1.0 : -0.5;
+
+  if (current === null) {
+    return {
+      newVec: nameVec.map(v => v * newWeight),
+      newLiked:    liked ? 1 : 0,
+      newDisliked: liked ? 0 : 1,
+    };
+  }
+
+  const { embedding: curVec, liked_count, disliked_count, onboarding_count } = current;
+  const total = liked_count + disliked_count + (onboarding_count ?? 0);
+
+  if (priorLiked === null) {
+    return {
+      newVec: curVec.map((v, i) => (v * total + nameVec[i] * newWeight) / (total + 1)),
+      newLiked:    liked_count    + (liked ? 1 : 0),
+      newDisliked: disliked_count + (liked ? 0 : 1),
+    };
+  }
+
+  if (priorLiked === liked) {
+    return { newVec: curVec, newLiked: liked_count, newDisliked: disliked_count };
+  }
+
+  const oldWeight = priorLiked ? 1.0 : -0.5;
+  return {
+    newVec: curVec.map((v, i) => (v * total - oldWeight * nameVec[i] + newWeight * nameVec[i]) / total),
+    newLiked:    liked_count    + (liked ? 1 : 0) - (priorLiked ? 1 : 0),
+    newDisliked: disliked_count + (liked ? 0 : 1) - (priorLiked ? 0 : 1),
+  };
+}
+
 export async function recordSwipe(deviceId: string, body: Record<string, unknown>) {
   const name        = body.name as string | undefined;
   const liked       = body.liked;
@@ -582,7 +707,19 @@ export async function recordSwipe(deviceId: string, body: Record<string, unknown
   if (vectorResult.rows.length === 0) return err(404, `name not found: ${name}`);
 
   const nameVec = parseVec(vectorResult.rows[0].embedding as unknown as string);
-  const weight  = liked ? 1.0 : -0.5;
+
+  // Read prior swipe (if any) and taste row in parallel before mutating either,
+  // so a re-swipe can reverse the prior contribution instead of double-counting.
+  const [priorSwipe, tasteRow] = await Promise.all([
+    pool.query<{ liked: boolean }>(
+      'SELECT liked FROM user_swipes WHERE user_id = $1 AND name = $2 AND sex_context = $3',
+      [deviceId, name, sex_context],
+    ),
+    pool.query<{ embedding: string; liked_count: number; disliked_count: number; onboarding_count: number }>(
+      'SELECT embedding, liked_count, disliked_count, onboarding_count FROM user_taste WHERE user_id = $1 AND sex_context = $2',
+      [deviceId, sex_context],
+    ),
+  ]);
 
   await pool.query(
     `INSERT INTO user_swipes (user_id, name, liked, sex_context)
@@ -591,28 +728,15 @@ export async function recordSwipe(deviceId: string, body: Record<string, unknown
     [deviceId, name, liked, sex_context],
   );
 
-  const tasteRow = await pool.query<{ embedding: string; liked_count: number; disliked_count: number; onboarding_count: number }>(
-    'SELECT embedding, liked_count, disliked_count, onboarding_count FROM user_taste WHERE user_id = $1 AND sex_context = $2',
-    [deviceId, sex_context],
-  );
+  const priorLiked: boolean | null = priorSwipe.rows.length > 0 ? priorSwipe.rows[0].liked : null;
+  const current: TasteSnapshot | null = tasteRow.rows.length === 0 ? null : {
+    embedding:        parseVec(tasteRow.rows[0].embedding as unknown as string),
+    liked_count:      tasteRow.rows[0].liked_count,
+    disliked_count:   tasteRow.rows[0].disliked_count,
+    onboarding_count: tasteRow.rows[0].onboarding_count ?? 0,
+  };
 
-  let newVec: number[];
-  let newLiked: number;
-  let newDisliked: number;
-
-  if (tasteRow.rows.length === 0) {
-    newVec = nameVec.map(v => v * weight);
-    newLiked    = liked ? 1 : 0;
-    newDisliked = liked ? 0 : 1;
-  } else {
-    const row    = tasteRow.rows[0];
-    const curVec = parseVec(row.embedding as unknown as string);
-    // Include onboarding_count so onboarding signal decays naturally as real swipes accumulate
-    const total  = row.liked_count + row.disliked_count + (row.onboarding_count ?? 0);
-    newVec      = curVec.map((v, i) => (v * total + nameVec[i] * weight) / (total + 1));
-    newLiked    = row.liked_count    + (liked ? 1 : 0);
-    newDisliked = row.disliked_count + (liked ? 0 : 1);
-  }
+  const { newVec, newLiked, newDisliked } = computeTasteUpdate(current, priorLiked, nameVec, liked);
 
   await pool.query(
     `INSERT INTO user_taste (user_id, sex_context, embedding, liked_count, disliked_count, updated_at)
