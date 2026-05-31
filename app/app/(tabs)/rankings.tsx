@@ -75,7 +75,7 @@ export default function RankingsScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Rankings</Text>
+        <Text style={styles.headerTitle}>Lists</Text>
         <TouchableOpacity style={styles.yearBtn} onPress={() => setYearPickerOpen(true)}>
           <Text style={styles.yearBtnText}>{year}</Text>
           <Ionicons name="chevron-down" size={15} color={colors.primary} />

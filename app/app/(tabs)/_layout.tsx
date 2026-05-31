@@ -52,14 +52,14 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="rankings"
           options={{
-            title: 'Rankings',
-            tabBarIcon: ({ color, size }) => <Ionicons name="trophy" size={size} color={color} />,
+            title: 'Lists',
+            tabBarIcon: ({ color, size }) => <Ionicons name="list" size={size} color={color} />,
           }}
         />
         <Tabs.Screen
           name="my-list"
           options={{
-            title: 'My Lists',
+            title: 'My Names',
             tabBarIcon: ({ color, size }) => <Ionicons name="bookmark" size={size} color={color} />,
           }}
         />

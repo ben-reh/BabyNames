@@ -340,7 +340,7 @@ export default function MyListsScreen() {
     <>
       <NestableScrollContainer style={styles.container} contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>My Lists</Text>
+          <Text style={styles.headerTitle}>My Names</Text>
         </View>
 
         <View style={styles.segmentedRow}>
